@@ -13,3 +13,13 @@ typecheck:
 
 run:
 	uvicorn app.main:app --reload
+
+audit:
+	uv export --extra dev --no-hashes -o requirements-audit.txt
+	pip-audit -r requirements-audit.txt --progress-spinner off
+	rm -f requirements-audit.txt
+
+screenshots:
+	uv sync --extra screenshots
+	playwright install chromium
+	python scripts/capture_screenshots.py

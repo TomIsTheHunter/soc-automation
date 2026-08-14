@@ -24,5 +24,20 @@ jobs:
         run: uv run ruff format --check .
       - name: Mypy
         run: uv run mypy app tests
-      - name: Tests (network disabled)
+      - name: Tests (network disabled, includes frontend + integration tests)
         run: uv run pytest
+      - name: Dependency vulnerability audit
+        run: |
+          uv export --extra dev --no-hashes -o requirements-audit.txt
+          uv run pip-audit -r requirements-audit.txt --progress-spinner off
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks (full history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
