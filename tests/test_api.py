@@ -19,7 +19,13 @@ def test_health_and_high_risk_workflow(client: Any, high_risk_alert: dict[str, o
         "indicators_extracted",
         "enriched",
         "triaged",
+        "ai_requested",
+        "ai_received",
+        "ai_validated",
     ]
+    assert body["ai_assisted_analysis"]["status"] == "available"
+    assert body["ai_assisted_analysis"]["result"]["provider_name"] == "mock"
+    assert body["ai_assisted_analysis"]["decision_authority"] == "DETERMINISTIC"
 
 
 def test_benign_and_ambiguous_fixtures(
