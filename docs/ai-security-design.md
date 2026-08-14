@@ -99,8 +99,8 @@ added to this allowlist.
 - **Bounded timeout, no silent retries**: every provider call is wrapped in
   `asyncio.wait_for` with a configurable timeout
   (`AI_PROVIDER_TIMEOUT_SECONDS`, default 8s), enforced at the call site in
-  [app/api/routes.py](../app/api/routes.py). Neither the mock nor the live
-  provider perform automatic retries.
+  [app/services/workflow.py](../app/services/workflow.py). Neither the mock
+  nor the live provider perform automatic retries.
 - **Safe fallback**: provider unavailability, timeout, unexpected
   exceptions, and validation failures all degrade to
   `ai_assisted_analysis.status = "unavailable"` or `"rejected"` - the
@@ -108,12 +108,18 @@ added to this allowlist.
 - **Audit trail**: `processing_history` records `ai_requested`,
   `ai_received`, `ai_validated`, `ai_rejected` (with the specific rejection
   reason), `ai_unavailable` (with a reason), and `analyst_review` entries.
+  The Stage 3 analyst demo view ([app/web](../app/web)) renders this exact
+  history and visually separates observed facts, the deterministic
+  decision, and AI-assisted analysis using both color and non-color badges
+  - it never presents AI output as an authoritative decision.
 - **Automated testing, enforced offline**: `tests/test_ai_investigation.py`
   covers the happy path, every malformed-output shape, provider failure and
   an actually-enforced timeout, both policy layers, ungrounded evidence, a
   deterministic/AI conflict, and prompt-injection-style input - all under
   `pytest-socket`'s global `--disable-socket` guard, so the offline
-  guarantee is enforced, not just claimed.
+  guarantee is enforced, not just claimed. `tests/test_web.py` additionally
+  verifies the demo view never fabricates a processing stage that did not
+  actually run.
 
 ## Limitations
 

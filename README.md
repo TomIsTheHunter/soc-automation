@@ -1,78 +1,193 @@
 # SOC Automation Platform
 
+An automation-first SOC workflow: ingest a synthetic security alert, enrich its indicators, apply explainable deterministic triage, and layer in bounded, validated AI-assisted investigation &mdash; with an analyst-facing demo view that makes every trust boundary visible.
+
 [![CI](https://github.com/example/soc-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/example/soc-automation/actions/workflows/ci.yml)
 
-## Problem
+## Why This Exists
 
-Security operations teams receive large numbers of endpoint alerts and need reliable enrichment and prioritization before analyst investigation.
+SOC analysts are flooded with endpoint alerts. Most of the triage work is repetitive: pull the indicators, check if they're known-bad, decide whether this is worth a human's time. Doing that by hand at volume is slow and inconsistent; doing it with an opaque black box is dangerous. This project demonstrates a middle path:
+
+- **Deterministic, explainable triage** handles the actual security decision, so the same evidence always produces the same, auditable outcome.
+- **Enrichment is treated as fallible** external data, not ground truth &mdash; if it's unavailable, the system fails closed to analyst review rather than guessing.
+- **AI assists the analyst**, summarizing evidence and suggesting investigation steps, but it is structurally incapable of closing an alert, overriding triage, or executing anything.
+- **Every stage is auditable**: a processing history shows exactly what happened, and the demo UI never hides a degraded state behind a generic "success" screen.
 
 ## Current Stage
 
-**Stage 2: Bounded AI-Assisted Investigation** (built on the Stage 1 deterministic core)
+**Stage 3: Recruiter- and Interview-Ready Vertical Slice**, built on:
+
+- Stage 1: FastAPI ingestion, validation, normalization, indicator extraction, deterministic triage.
+- Stage 2: bounded AI-assisted investigation with structured output and policy validation.
+- Stage 3 (this stage): a server-rendered analyst demo view, dependency-injected failure scenarios, an integration test, and repository/documentation polish.
 
 This repository processes a **CrowdStrike-style synthetic alert**. It is not an official CrowdStrike schema, proprietary telemetry, real CrowdStrike data, or a production integration.
 
-## Solution
+## What It Demonstrates
 
-The vertical slice is intentionally small and deterministic:
-
-`Ingest -> Normalize -> Extract -> Enrich -> Triage`
-
-A suspicious synthetic PowerShell alert enters FastAPI, is validated and normalized behind a source adapter, enriched using a fixed mock table, and returned with an explainable decision.
+- FastAPI security alert ingestion with a bounded (256 KiB) request size limit
+- Pydantic v2 validation at every boundary (severity enum, `IPvAnyAddress`, UTC-aware timestamps)
+- Vendor-independent normalization behind a dedicated source adapter
+- Indicator extraction (IPs, hashes) with source-field context
+- An `EnrichmentProvider` abstraction with a deterministic mock and a documented lookup table
+- Deterministic, precedence-ordered triage (first-match-wins rules, fully explainable)
+- Bounded AI-assisted investigation behind an `InvestigationAssistant` abstraction
+- Structured AI output validation (`extra="forbid"`, schema versioning, controlled vocabularies)
+- Policy controls: vocabulary constraints, a keyword denylist, and an evidence-grounding check
+- Safe failure handling for enrichment and AI failures, always failing closed to analyst review
+- A server-rendered analyst investigation view reusing the exact same pipeline as the API
+- Automated testing (unit, API, frontend, and one full end-to-end integration test), enforced offline via `pytest-socket`
+- GitHub Actions CI: lint, type checks, tests, dependency vulnerability audit, and a full-history secret scan
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    A[Synthetic Alert] --> B[FastAPI Ingestion]
-    B --> C[Validation]
-    C --> D[Source Adapter]
-    D --> E[Normalized Alert]
-    E --> F[Indicator Extraction]
-    F --> G[Enrichment Provider]
-    G --> H[Deterministic Triage]
-    H --> I[Structured Result]
+```
+Synthetic Alert
+      │
+      ▼
+FastAPI Ingestion
+      │
+      ▼
+  Validation
+      │
+      ▼
+ Source Adapter
+      │
+      ▼
+Normalized Alert
+      │
+      ▼
+Indicator Extraction
+      │
+      ▼
+   Enrichment
+      │
+      ▼
+Deterministic Triage
+      │
+      ├──────────────────┐
+      │                  │
+      ▼                  ▼
+Investigation       Authoritative
+   Context             Decision
+      │
+      ▼
+ AI Assistant
+      │
+      ▼
+Schema Validation
+      │
+      ▼
+Policy Validation
+      │
+      ▼
+AI-Assisted Analysis
+      │
+      ▼
+Analyst Review
 ```
 
-See [docs/architecture.md](docs/architecture.md) for components, trust boundaries, and failure behavior.
+See [docs/architecture.md](docs/architecture.md) for components, trust boundaries, and failure behavior, and [docs/ai-security-design.md](docs/ai-security-design.md) for the full AI threat model.
 
 ## Security Design Principles
 
-- Deterministic triage is authoritative and explainable.
-- External-style data is untrusted and enrichment is fallible.
-- Enrichment failures fail closed to `ANALYST_REVIEW`, never to `ESCALATE` or `LOW_RISK`.
-- Validation occurs at API and source-adapter boundaries.
-- Request bodies are bounded at 256 KiB.
-- Tests enforce offline execution with `pytest-socket`.
-- No secrets are committed; every example IP is from an RFC 5737 documentation range.
+- **Deterministic authority**: `triage.decision` is produced by explicit, precedence-ordered rules and is never changed by AI output.
+- **AI is advisory**: the investigation assistant summarizes, organizes evidence, and suggests investigation steps &mdash; it cannot execute or authorize any security action.
+- **Structured AI output**: AI output is parsed into a strict, `extra="forbid"` Pydantic schema with a `schema_version` before it is trusted at all.
+- **Policy validation**: prohibited actions are rejected via a controlled action vocabulary, a keyword denylist, and an evidence-grounding check.
+- **Untrusted input**: alert content (including AI-facing fields) is always treated as untrusted telemetry, never as instructions.
+- **Safe dependency failure**: enrichment and AI failures never crash the workflow and never fail open to `ESCALATE` or `LOW_RISK`.
+- **Auditability**: every processing stage that actually ran is recorded with a UTC timestamp, and the demo UI renders exactly that history &mdash; nothing fabricated.
+- **Testing**: failure paths (provider unavailable, timeout, malformed output, policy violations, ungrounded evidence) are tested as thoroughly as the happy path.
+- **Repository hygiene**: CI runs a full-history secret scan (gitleaks) and a dependency vulnerability audit (`pip-audit`) before merge.
 
 ## Running Locally
 
-The project uses `uv` and `pyproject.toml` as its dependency source. The authoring environment did not have `uv`, so local verification used the documented pip fallback. With `uv` installed:
+### Installation
 
 ```bash
 uv sync --extra dev
-make test
-make lint
-make typecheck
-make run
 ```
 
-Fallback without `uv`:
+If `uv` is unavailable, the fallback (used during parts of this project's own development) is:
 
 ```bash
 python -m pip install -e ".[dev]"
-make test
-make lint
-make typecheck
+```
+
+### Backend + Frontend
+
+The analyst demo view is served by the same FastAPI process &mdash; there is no separate frontend build step or process to start:
+
+```bash
 make run
 ```
 
-The API is available at `http://127.0.0.1:8000`, with OpenAPI docs at `/docs`.
+The app is available at `http://127.0.0.1:8000`:
+
+- `/` &mdash; demo scenario picker
+- `/demo/{scenario_name}` &mdash; the analyst investigation view for one scenario
+- `/docs` &mdash; interactive OpenAPI docs for `POST /api/v1/alerts`
+- `/health` &mdash; health check
+
+### Tests
+
+```bash
+make test
+```
+
+### Linting / Type Checks
+
+```bash
+make lint
+make typecheck
+```
+
+### Dependency audit
+
+```bash
+make audit
+```
+
+### Demo
+
+With the app running (`make run`), open `http://127.0.0.1:8000/` and click any scenario, or go directly to:
+
+| Scenario | URL | Demonstrates |
+|---|---|---|
+| Successful investigation | `http://127.0.0.1:8000/demo/high_risk` | Malicious enrichment &rarr; `ESCALATE` &rarr; AI investigation assistance |
+| Enrichment failure | `http://127.0.0.1:8000/demo/enrichment_failure` | Enrichment unavailable &rarr; fails closed to `ANALYST_REVIEW` |
+| AI failure | `http://127.0.0.1:8000/demo/ai_failure` | AI assistant unavailable &rarr; deterministic `ESCALATE` stays intact |
+| Invalid AI output | `http://127.0.0.1:8000/demo/ai_invalid` | Malformed AI output rejected by schema validation |
+| Low-risk alert | `http://127.0.0.1:8000/demo/low_risk` | Benign evidence &rarr; `LOW_RISK`, no unnecessary escalation |
+| Ambiguous alert | `http://127.0.0.1:8000/demo/ambiguous` | Conflicting signals &rarr; catch-all `ANALYST_REVIEW` |
+
+The same mechanism is available as JSON via `curl`:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/alerts?scenario=enrichment_failure" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alert_id":"synthetic-high-001",
+    "timestamp":"2026-01-15T12:00:00Z",
+    "hostname":"workstation-07",
+    "username":"synthetic.user",
+    "severity":"HIGH",
+    "process_name":"powershell.exe",
+    "command_line":"powershell.exe -EncodedCommand synthetic-payload",
+    "source_ip":"192.0.2.25",
+    "destination_ip":"198.51.100.10",
+    "file_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "detection_description":"Synthetic encoded PowerShell command contacted a known synthetic C2 indicator.",
+    "source":"crowdstrike-style-synthetic"
+  }'
+```
+
+`?scenario=ai_failure` swaps in the same `FailingInvestigationAssistant` test double used by the automated tests, via the existing dependency-injection seam &mdash; no hard-coded frontend results anywhere.
 
 ## API Example
 
-This sends the reusable high-risk fixture shape. All values are synthetic.
+`POST /api/v1/alerts` against the high-risk fixture, without any scenario override:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/alerts \
@@ -125,59 +240,47 @@ The response includes the normalized alert, indicators, enrichment, ordered proc
 
 Note that `triage.decision` is always the authoritative result; `ai_assisted_analysis` is advisory context only.
 
-## Testing
+## Screenshots
 
-`make test` runs pytest with `--disable-socket` globally, covering both the Stage 1 deterministic core and Stage 2 AI-assisted investigation. The API tests use an in-process ASGI transport, so the suite does not need loopback networking. Tests cover valid, malformed, oversized, unsupported, ambiguous, low-risk, and enrichment-failure paths, plus RFC 5737 fixture checks, Rule B precedence, and every Stage 2 AI failure mode (see below).
+Located in [docs/screenshots/](docs/screenshots/), regenerated on demand via:
 
-## Bounded AI-Assisted Investigation
-
-**Why AI is introduced.** Deterministic triage alone cannot summarize context or suggest investigation steps the way an analyst-facing assistant can. Stage 2 adds an AI investigation assistant strictly as **advisory analyst support** - it never changes what happens to the alert.
-
-**What AI is allowed to do:** summarize the alert, organize evidence, explain context, suggest investigation steps from a controlled vocabulary, identify uncertainty, and provide an advisory risk assessment.
-
-**What AI is prohibited from doing:** close alerts, override deterministic triage, execute actions, invoke tools, isolate hosts, disable accounts, change any security state, or have its output trusted without validation.
-
-**Why deterministic triage remains authoritative.** The `triage` block is produced by the same explainable, precedence-ordered Stage 1 rules regardless of what the AI returns. If the AI disagrees, that disagreement is surfaced (`conflicts_with_triage: true`, `analyst_review_required: true`) - it is never resolved by trusting the AI.
-
-```mermaid
-flowchart TD
-    A[Alert] --> B[Normalize]
-    B --> C[Enrich]
-    C --> D[Deterministic Triage]
-    D --> E[Investigation Context]
-    E --> F[AI Assistant]
-    F --> G[Structured Output]
-    G --> H[Schema Validation]
-    H --> I[Policy Validation]
-    I --> J[AI-Assisted Result]
-    D -.authoritative decision, unaffected by AI.-> K[Authoritative Decision]
+```bash
+make screenshots
 ```
 
-**Structured output validation.** The AI provider returns raw structured data, which must pass a strict Pydantic schema (`InvestigationResult`, `extra="forbid"`, versioned via `schema_version`) before it is trusted at all. Unknown fields or invalid enum values are rejected, not silently repaired.
+This starts the real app, drives it with Playwright, and saves a full-page screenshot of each scenario &mdash; so the images are provably current with the UI rather than stale, hand-made artifacts. All data shown is synthetic (RFC 5737 IP ranges, placeholder hashes, `synthetic.user`, `workstation-07`).
 
-**Policy validation.** Two independent layers: (1) `recommended_actions` values must already come from a controlled investigation-oriented vocabulary, making most prohibited actions structurally inexpressible; (2) a keyword denylist (`isolate`, `execute`, `close alert`, ...) scans free-text fields as defense-in-depth. A third check, evidence grounding, rejects `key_evidence` entries that don't reference any value actually present in the supplied context - a concrete, testable proxy for fabricated evidence.
+| | |
+|---|---|
+| ![Successful investigation](docs/screenshots/01-successful-investigation.png) | Successful investigation: alert, enrichment, deterministic `ESCALATE`, and AI-assisted analysis, clearly labelled and separated. |
+| ![Enrichment failure](docs/screenshots/02-enrichment-failure.png) | Enrichment failure: deterministic result stays intact, degraded state is visible, analyst review is required. |
+| ![AI failure](docs/screenshots/03-ai-failure.png) | AI failure: AI assistance unavailable, `ESCALATE` decision is completely unaffected. |
 
-**Provider failure and timeouts.** Every AI call is wrapped in an explicit, configurable timeout (`AI_PROVIDER_TIMEOUT_SECONDS`, default 8s) enforced with `asyncio.wait_for` at the call site - not merely documented. Provider unavailability, timeouts, and unexpected exceptions all degrade safely: the deterministic `triage` result is always returned, and `ai_assisted_analysis.status` becomes `unavailable`.
+## Testing
 
-**Prompt injection.** Alert content is always treated as untrusted telemetry, never as instructions. See [docs/ai-security-design.md](docs/ai-security-design.md) for the full trust-boundary design.
+`make test` runs the full suite (unit, API, frontend, and integration tests) with `--disable-socket` enforced globally via `pytest-socket` &mdash; including all frontend and AI tests, so the "runs offline" claim is enforced, not just asserted. Coverage includes:
 
-**Safe degradation testing.** [tests/test_ai_investigation.py](tests/test_ai_investigation.py) exercises the happy path, every malformed-output shape, provider unavailability, an enforced timeout, both policy-validation layers, ungrounded evidence, a deterministic/AI conflict, and prompt-injection-style input - entirely offline via `pytest-socket`.
+- Happy path: valid alert, correct normalization, indicator extraction, enrichment matching the documented lookup table, `ESCALATE` on high-risk malicious evidence.
+- Validation: missing fields, invalid severity/IP, malformed JSON, unsupported source, oversized payloads.
+- Failure handling: enrichment unavailable, AI unavailable, AI timeout (actually enforced, not just claimed), malformed AI output, policy violations (both layers), ungrounded evidence, deterministic/AI conflict.
+- Frontend: each demo scenario renders the correct provenance labels, state banners, and processing history &mdash; via `pytest` + an in-process ASGI client, no separate JS test runner.
+- Integration: [tests/test_integration_workflow.py](tests/test_integration_workflow.py) asserts on every stage boundary of the complete pipeline in one test.
 
 ## Limitations
 
-- Synthetic security data only.
-- Mock threat-intelligence provider only.
-- The AI investigation assistant defaults to a deterministic offline mock; the optional live provider is not required and is never used in CI.
+- Synthetic security data only; no real alerts, credentials, or customer data.
+- Mock threat-intelligence provider only; the optional live AI provider is not required and is never used in CI.
 - Policy validation (keyword denylist, evidence grounding) is heuristic defense-in-depth, not a formal guarantee against a determined adversarial provider.
 - Prototype, not production-hardened.
-- No live CrowdStrike integration or automated containment.
+- No live CrowdStrike integration or automated containment/remediation.
 - No authentication or authorization.
-- No production deployment claim.
+- No production deployment claim; Docker is provided for local reproducibility, not for production use.
 
 ## Roadmap
 
-Later stages may add an analyst-facing investigation UI, additional audit/evidence features, and expanded threat-intelligence sources. They are intentionally not implemented here.
+Later stages may add an analyst-facing chat/investigation UI beyond the current demo view, richer audit/evidence export, and additional enrichment sources. See [docs/cv-project-summary.md](docs/cv-project-summary.md) for a condensed project summary.
 
 ## License
 
 Released under the MIT License. See [LICENSE](LICENSE).
+
