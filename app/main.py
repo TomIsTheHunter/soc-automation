@@ -6,9 +6,37 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.routes import router
+from app.config import get_ai_provider_name, get_ai_timeout_seconds
 from app.enrichment.providers import MockEnrichmentProvider
+from app.investigation.assistant import InvestigationAssistant
+from app.investigation.mock import MockInvestigationAssistant
 
 MAX_ALERT_BODY_BYTES = 256 * 1024
+
+logger = logging.getLogger(__name__)
+
+
+def select_investigation_assistant() -> InvestigationAssistant:
+    """Select the configured AI provider, always degrading safely to the mock.
+
+    The default (and CI/test) provider is always `mock`. If a live provider
+    is configured but unavailable (missing credentials, missing optional
+    SDK, or any construction error), the application logs a warning and
+    falls back to the mock provider rather than failing to start.
+    """
+    provider_name = get_ai_provider_name()
+    if provider_name == "mock":
+        return MockInvestigationAssistant()
+    try:
+        from app.investigation.live import AnthropicInvestigationAssistant
+
+        return AnthropicInvestigationAssistant()
+    except Exception:
+        logger.warning(
+            "AI provider %r unavailable; falling back to the mock investigation assistant",
+            provider_name,
+        )
+        return MockInvestigationAssistant()
 
 
 class AlertBodySizeLimitMiddleware:
@@ -38,16 +66,34 @@ class AlertBodySizeLimitMiddleware:
         await self.app(scope, receive, send)
 
 
-def create_app(enrichment_provider: object | None = None) -> FastAPI:
+def create_app(
+    enrichment_provider: object | None = None,
+    investigation_assistant: InvestigationAssistant | None = None,
+    ai_timeout_seconds: float | None = None,
+) -> FastAPI:
     application = FastAPI(
         title="SOC Automation Platform",
-        description="Stage 1 deterministic processing for a CrowdStrike-style synthetic alert.",
-        version="0.1.0",
+        description=(
+            "Stage 1 deterministic processing plus Stage 2 bounded AI-assisted "
+            "investigation for a CrowdStrike-style synthetic alert."
+        ),
+        version="0.2.0",
         openapi_tags=[
-            {"name": "alerts", "description": "Alert ingestion and deterministic triage"}
+            {
+                "name": "alerts",
+                "description": (
+                    "Alert ingestion, deterministic triage, and AI-assisted investigation"
+                ),
+            }
         ],
     )
     application.state.enrichment_provider = enrichment_provider or MockEnrichmentProvider()
+    application.state.investigation_assistant = (
+        investigation_assistant or select_investigation_assistant()
+    )
+    application.state.ai_timeout_seconds = (
+        ai_timeout_seconds if ai_timeout_seconds is not None else get_ai_timeout_seconds()
+    )
     application.add_middleware(AlertBodySizeLimitMiddleware)
     application.include_router(router)
 

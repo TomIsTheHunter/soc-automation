@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, cast
@@ -9,7 +10,14 @@ from app.enrichment.providers import (
     EnrichmentProvider,
     EnrichmentUnavailableError,
 )
+from app.investigation.assistant import InvestigationAssistant, InvestigationUnavailableError
+from app.investigation.context import build_investigation_context
+from app.investigation.validation import InvestigationValidationError, validate_investigation_result
 from app.models import (
+    AIAssistedAnalysis,
+    AIConfidence,
+    AIRiskAssessment,
+    AIStatus,
     Confidence,
     CrowdStrikeStyleAlert,
     EnrichmentResult,
@@ -17,6 +25,7 @@ from app.models import (
     ProcessingResponse,
     ProcessingStage,
     Reputation,
+    TriageDecision,
     TriageResult,
 )
 from app.services.indicators import extract_indicators
@@ -34,8 +43,32 @@ def provider_from_request(request: Request) -> EnrichmentProvider:
     return cast(EnrichmentProvider, request.app.state.enrichment_provider)
 
 
+def investigation_assistant_from_request(request: Request) -> InvestigationAssistant:
+    return cast(InvestigationAssistant, request.app.state.investigation_assistant)
+
+
+def ai_timeout_from_request(request: Request) -> float:
+    return cast(float, request.app.state.ai_timeout_seconds)
+
+
 def history_entry(stage: ProcessingStage, **context: object) -> ProcessingHistoryEntry:
     return ProcessingHistoryEntry(stage=stage, timestamp=utc_now(), context=context)
+
+
+def ai_conflicts_with_triage(decision: TriageDecision, risk_assessment: AIRiskAssessment) -> bool:
+    """Detect (never resolve) disagreement between the AI and deterministic triage.
+
+    The deterministic decision always remains authoritative; this only makes
+    a detected conflict visible to the analyst.
+    """
+    if decision == TriageDecision.ESCALATE and risk_assessment in {
+        AIRiskAssessment.LOW,
+        AIRiskAssessment.MEDIUM,
+    }:
+        return True
+    if decision == TriageDecision.LOW_RISK and risk_assessment == AIRiskAssessment.HIGH:
+        return True
+    return False
 
 
 @router.post(
@@ -44,9 +77,11 @@ def history_entry(stage: ProcessingStage, **context: object) -> ProcessingHistor
     status_code=status.HTTP_200_OK,
     responses={413: {"description": "Request body exceeds the configured limit"}},
 )
-def ingest_alert(
+async def ingest_alert(
     payload: CrowdStrikeStyleAlert,
     provider: Annotated[EnrichmentProvider, Depends(provider_from_request)],
+    ai_assistant: Annotated[InvestigationAssistant, Depends(investigation_assistant_from_request)],
+    ai_timeout_seconds: Annotated[float, Depends(ai_timeout_from_request)],
 ) -> ProcessingResponse:
     history = [history_entry(ProcessingStage.RECEIVED)]
     history.append(history_entry(ProcessingStage.VALIDATED))
@@ -95,10 +130,82 @@ def ingest_alert(
 
     triage: TriageResult = triage_alert(normalized, enrichment, enrichment_available)
     history.append(history_entry(ProcessingStage.TRIAGED, decision=triage.decision))
+
+    investigation_context = build_investigation_context(normalized, indicators, enrichment, triage)
+    history.append(history_entry(ProcessingStage.AI_REQUESTED))
+
+    ai_status = AIStatus.UNAVAILABLE
+    ai_result = None
+    rejection_reason: str | None = None
+    try:
+        raw_output = await asyncio.wait_for(
+            ai_assistant.investigate(investigation_context, ai_timeout_seconds),
+            timeout=ai_timeout_seconds,
+        )
+        history.append(history_entry(ProcessingStage.AI_RECEIVED))
+        ai_result = validate_investigation_result(raw_output, investigation_context)
+        ai_status = AIStatus.AVAILABLE
+        history.append(history_entry(ProcessingStage.AI_VALIDATED, confidence=ai_result.confidence))
+    except TimeoutError:
+        history.append(history_entry(ProcessingStage.AI_UNAVAILABLE, reason="timeout"))
+        logger.warning("AI investigation timed out for alert %s", normalized.source_alert_id)
+    except InvestigationUnavailableError as exc:
+        history.append(history_entry(ProcessingStage.AI_UNAVAILABLE, reason="provider_unavailable"))
+        logger.warning(
+            "AI investigation provider unavailable for alert %s: %s",
+            normalized.source_alert_id,
+            exc,
+        )
+    except InvestigationValidationError as exc:
+        ai_status = AIStatus.REJECTED
+        rejection_reason = f"{exc.reason.value}: {exc}"
+        history.append(history_entry(ProcessingStage.AI_REJECTED, reason=rejection_reason))
+        logger.warning(
+            "AI investigation output rejected for alert %s: %s",
+            normalized.source_alert_id,
+            rejection_reason,
+        )
+    except Exception:
+        history.append(history_entry(ProcessingStage.AI_UNAVAILABLE, reason="unexpected_error"))
+        logger.exception(
+            "Unexpected AI investigation failure for alert %s", normalized.source_alert_id
+        )
+
+    conflicts_with_triage = (
+        ai_status == AIStatus.AVAILABLE
+        and ai_result is not None
+        and (ai_conflicts_with_triage(triage.decision, ai_result.risk_assessment))
+    )
+    low_confidence = (
+        ai_status == AIStatus.AVAILABLE
+        and ai_result is not None
+        and ai_result.confidence == AIConfidence.LOW
+    )
+    analyst_review_required = (
+        ai_status != AIStatus.AVAILABLE or conflicts_with_triage or low_confidence
+    )
+    if analyst_review_required:
+        history.append(
+            history_entry(
+                ProcessingStage.ANALYST_REVIEW,
+                ai_status=ai_status,
+                conflicts_with_triage=conflicts_with_triage,
+            )
+        )
+
+    ai_assisted_analysis = AIAssistedAnalysis(
+        status=ai_status,
+        result=ai_result,
+        rejection_reason=rejection_reason,
+        conflicts_with_triage=conflicts_with_triage,
+        analyst_review_required=analyst_review_required,
+    )
+
     return ProcessingResponse(
         alert=normalized,
         indicators=indicators,
         enrichment=enrichment,
         triage=triage,
+        ai_assisted_analysis=ai_assisted_analysis,
         processing_history=history,
     )
