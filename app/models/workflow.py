@@ -4,8 +4,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.alert import NormalizedAlert
-
 
 class IndicatorType(StrEnum):
     IP = "ip"
@@ -65,6 +63,12 @@ class ProcessingStage(StrEnum):
     INDICATORS_EXTRACTED = "indicators_extracted"
     ENRICHED = "enriched"
     TRIAGED = "triaged"
+    AI_REQUESTED = "ai_requested"
+    AI_RECEIVED = "ai_received"
+    AI_VALIDATED = "ai_validated"
+    AI_REJECTED = "ai_rejected"
+    AI_UNAVAILABLE = "ai_unavailable"
+    ANALYST_REVIEW = "analyst_review"
 
 
 class ProcessingHistoryEntry(BaseModel):
@@ -80,13 +84,3 @@ class ProcessingHistoryEntry(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("timestamp must be timezone-aware")
         return value.astimezone(UTC)
-
-
-class ProcessingResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    alert: NormalizedAlert
-    indicators: list[Indicator]
-    enrichment: list[EnrichmentResult]
-    triage: TriageResult
-    processing_history: list[ProcessingHistoryEntry] = Field(min_length=1)
