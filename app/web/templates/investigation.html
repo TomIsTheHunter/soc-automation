@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}{{ scenario.title }} &mdash; SOC Automation Platform{% endblock %}
+{% block content %}
+<p><a href="/">&larr; Back to demo scenarios</a></p>
+
+<div class="card">
+  <h2>{{ scenario.title }}</h2>
+  <p class="provenance-note">{{ scenario.description }}</p>
+</div>
+
+{% if result.ai_assisted_analysis.analyst_review_required %}
+<div class="analyst-review-banner">
+  &#9888; ANALYST REVIEW REQUIRED &mdash;
+  {% if result.ai_assisted_analysis.status.value != "available" %}
+    AI-assisted analysis is {{ result.ai_assisted_analysis.status.value }}.
+  {% elif result.ai_assisted_analysis.conflicts_with_triage %}
+    AI risk assessment conflicts with the deterministic decision.
+  {% else %}
+    AI-assisted analysis has low confidence.
+  {% endif %}
+  The deterministic decision below remains authoritative and unaffected.
+</div>
+{% endif %}
+
+<div class="card section-observed">
+  <span class="badge badge-observed">Observed Fact</span>
+  <h2>Alert Overview</h2>
+  <dl class="fact-list">
+    <dt>Internal Alert ID</dt><dd>{{ result.alert.internal_alert_id }}</dd>
+    <dt>Source Alert ID</dt><dd>{{ result.alert.source_alert_id }}</dd>
+    <dt>Timestamp (UTC)</dt><dd>{{ result.alert.timestamp.isoformat() }}</dd>
+    <dt>Hostname</dt><dd>{{ result.alert.hostname }}</dd>
+    <dt>Username</dt><dd>{{ result.alert.username }}</dd>
+    <dt>Severity</dt><dd>{{ result.alert.severity.value }}</dd>
+    <dt>Detection Description</dt><dd>{{ result.alert.detection_description }}</dd>
+    {% if result.alert.process_name %}<dt>Process</dt><dd>{{ result.alert.process_name }}</dd>{% endif %}
+    {% if result.alert.command_line %}<dt>Command Line</dt><dd>{{ result.alert.command_line }}</dd>{% endif %}
+  </dl>
+</div>
+
+<div class="card section-observed">
+  <span class="badge badge-observed">Observed Fact + Enrichment</span>
+  <h2>Indicators &amp; Enrichment</h2>
+  {% if result.indicators %}
+  <table class="indicator-table">
+    <thead>
+      <tr><th>Type</th><th>Value</th><th>Source Field</th><th>Reputation</th><th>Confidence</th><th>Category</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      {% for indicator in result.indicators %}
+      {% set enrichment = result.enrichment[loop.index0] if loop.index0 < result.enrichment|length else None %}
+      <tr>
+        <td>{{ indicator.type.value }}</td>
+        <td>{{ indicator.value }}</td>
+        <td>{{ indicator.source }}</td>
+        <td>{{ enrichment.reputation.value if enrichment else "-" }}</td>
+        <td>{{ enrichment.confidence.value if enrichment else "-" }}</td>
+        <td>{{ enrichment.category if enrichment and enrichment.category else "-" }}</td>
+        <td>
+          {% if enrichment and enrichment.available %}
+            <span class="badge-status status-available">validated</span>
+          {% else %}
+            <span class="badge-status status-unavailable">unavailable</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if result.enrichment and not result.enrichment[0].available %}
+  <p class="analyst-review-banner">
+    Enrichment unavailable. Deterministic triage remains available. Analyst review recommended.
+  </p>
+  {% endif %}
+  {% else %}
+  <p class="provenance-note">No IP or hash indicators were present on this alert.</p>
+  {% endif %}
+</div>
+
+<div class="card section-deterministic">
+  <span class="badge badge-deterministic">&#9881; Rule-Based / Deterministic Decision</span>
+  <h2>DETERMINISTIC AUTOMATION</h2>
+  <p class="provenance-note">
+    This decision is produced by explicit, precedence-ordered rules. It is the
+    system's authoritative security decision and is never changed by AI output.
+  </p>
+  <dl class="fact-list">
+    <dt>Decision</dt><dd><strong>{{ result.triage.decision.value }}</strong></dd>
+    <dt>Rules Triggered</dt><dd>{{ result.triage.rules_triggered | join(", ") }}</dd>
+    <dt>Reason</dt><dd>{{ result.triage.reason }}</dd>
+    <dt>Evidence</dt><dd>{{ result.triage.evidence }}</dd>
+  </dl>
+</div>
+
+<div class="card section-ai">
+  <span class="badge badge-ai">&#129302; AI-Generated / Advisory</span>
+  <h2>AI-ASSISTED ANALYSIS</h2>
+  <p class="provenance-note">
+    AI-generated analyst assistance. Does not override deterministic triage.
+  </p>
+  <p>
+    Status:
+    <span class="badge-status status-{{ result.ai_assisted_analysis.status.value }}">
+      {{ result.ai_assisted_analysis.status.value }}
+    </span>
+    &mdash; Decision authority: <strong>{{ result.ai_assisted_analysis.decision_authority }}</strong>
+  </p>
+
+  {% if result.ai_assisted_analysis.status.value == "available" and result.ai_assisted_analysis.result %}
+  {% set ai = result.ai_assisted_analysis.result %}
+  <dl class="fact-list">
+    <dt>Summary</dt><dd>{{ ai.summary }}</dd>
+    <dt>Key Evidence</dt><dd>{{ ai.key_evidence | join("; ") if ai.key_evidence else "none" }}</dd>
+    <dt>Risk Assessment</dt><dd>{{ ai.risk_assessment.value }}</dd>
+    <dt>Recommended Actions</dt><dd>{{ ai.recommended_actions | map(attribute="value") | join(", ") }}</dd>
+    <dt>Confidence</dt><dd>{{ ai.confidence.value }}</dd>
+    <dt>Uncertainties</dt><dd>{{ ai.uncertainties | join("; ") if ai.uncertainties else "none stated" }}</dd>
+  </dl>
+  <p class="small-meta">provider: {{ ai.provider_name }} &middot; schema_version: {{ ai.schema_version }}</p>
+  {% if result.ai_assisted_analysis.conflicts_with_triage %}
+  <p class="analyst-review-banner">
+    AI risk assessment ({{ ai.risk_assessment.value }}) conflicts with the deterministic decision
+    ({{ result.triage.decision.value }}). The deterministic decision remains authoritative.
+  </p>
+  {% endif %}
+  {% elif result.ai_assisted_analysis.status.value == "rejected" %}
+  <p class="error-banner">
+    AI output was rejected by validation: {{ result.ai_assisted_analysis.rejection_reason }}.
+    Deterministic triage remains intact and unaffected.
+  </p>
+  {% else %}
+  <p class="error-banner">
+    AI assistance is currently unavailable. Deterministic triage remains available and
+    unaffected; analyst review is recommended.
+  </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Processing History</h2>
+  <ol class="history-list">
+    {% for row in history_rows %}
+    <li class="{{ row.css }}">{{ row.label }}</li>
+    {% endfor %}
+  </ol>
+</div>
+{% endblock %}

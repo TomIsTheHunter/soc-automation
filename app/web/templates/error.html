@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Demo Error &mdash; SOC Automation Platform{% endblock %}
+{% block content %}
+<div class="error-banner">
+  <strong>Request failed:</strong> {{ message }}
+</div>
+<p><a href="/">&larr; Back to demo scenarios</a></p>
+{% if scenarios %}
+<div class="card">
+  <h2>Available Scenarios</h2>
+  <ul class="scenario-list">
+    {% for scenario in scenarios %}
+    <li>
+      <a class="scenario-link" href="/demo/{{ scenario.name }}">{{ scenario.title }}</a>
+      <p>{{ scenario.description }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

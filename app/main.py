@@ -1,8 +1,10 @@
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.routes import router
@@ -10,6 +12,7 @@ from app.config import get_ai_provider_name, get_ai_timeout_seconds
 from app.enrichment.providers import MockEnrichmentProvider
 from app.investigation.assistant import InvestigationAssistant
 from app.investigation.mock import MockInvestigationAssistant
+from app.web.routes import web_router
 
 MAX_ALERT_BODY_BYTES = 256 * 1024
 
@@ -95,6 +98,12 @@ def create_app(
         ai_timeout_seconds if ai_timeout_seconds is not None else get_ai_timeout_seconds()
     )
     application.add_middleware(AlertBodySizeLimitMiddleware)
+    application.mount(
+        "/static",
+        StaticFiles(directory=str(Path(__file__).parent / "web" / "static")),
+        name="static",
+    )
+    application.include_router(web_router)
     application.include_router(router)
 
     @application.get("/health", tags=["health"])

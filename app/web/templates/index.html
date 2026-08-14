@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Demo Scenarios &mdash; SOC Automation Platform{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Demo Scenarios</h2>
+  <p class="provenance-note">
+    Each scenario runs the real ingestion &rarr; adapter &rarr; normalization &rarr; enrichment
+    &rarr; deterministic triage &rarr; AI investigation pipeline against one of the existing
+    synthetic Stage 1 fixtures. Failure scenarios inject the same test-double providers used by
+    the automated test suite (dependency injection), not hard-coded results.
+  </p>
+  <ul class="scenario-list">
+    {% for scenario in scenarios %}
+    <li>
+      <a class="scenario-link" href="/demo/{{ scenario.name }}"
+         onclick="this.textContent='Processing...'; this.style.pointerEvents='none';">
+        {{ scenario.title }}
+      </a>
+      <p>{{ scenario.description }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+<div class="card">
+  <h2>API</h2>
+  <p>
+    The same pipeline is available as JSON at <code>POST /api/v1/alerts</code>, with the same
+    scenario mechanism via <code>?scenario=enrichment_failure</code> or
+    <code>?scenario=ai_failure</code>. Interactive API docs: <a href="/docs">/docs</a>.
+  </p>
+</div>
+{% endblock %}

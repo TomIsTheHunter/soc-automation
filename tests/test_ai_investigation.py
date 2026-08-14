@@ -248,6 +248,29 @@ def test_provider_exception_does_not_crash_workflow(
     assert body["ai_assisted_analysis"]["status"] == "unavailable"
 
 
+def test_scenario_query_param_swaps_enrichment_provider(
+    client: Any, high_risk_alert: dict[str, object]
+) -> None:
+    """The `?scenario=enrichment_failure` DI seam used by the demo view."""
+    response = client.post("/api/v1/alerts?scenario=enrichment_failure", json=high_risk_alert)
+    body = response.json()
+    assert response.status_code == 200
+    assert body["triage"]["decision"] == "ANALYST_REVIEW"
+    assert body["triage"]["rules_triggered"] == ["RULE_B_ENRICHMENT_UNAVAILABLE"]
+    assert all(item["available"] is False for item in body["enrichment"])
+
+
+def test_scenario_query_param_swaps_ai_assistant(
+    client: Any, high_risk_alert: dict[str, object]
+) -> None:
+    """The `?scenario=ai_failure` DI seam used by the demo view."""
+    response = client.post("/api/v1/alerts?scenario=ai_failure", json=high_risk_alert)
+    body = response.json()
+    assert response.status_code == 200
+    assert body["triage"]["decision"] == "ESCALATE"
+    assert body["ai_assisted_analysis"]["status"] == "unavailable"
+
+
 # --------------------------------------------------------------------------
 # Low confidence
 # --------------------------------------------------------------------------
