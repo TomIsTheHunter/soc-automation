@@ -1,7 +1,7 @@
 [project]
 name = "soc-automation"
-version = "0.1.0"
-description = "Stage 1 deterministic SOC alert automation core"
+version = "0.2.0"
+description = "Stage 1 deterministic SOC core plus Stage 2 bounded AI-assisted investigation"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
@@ -19,6 +19,11 @@ dev = [
     "pytest>=8.3,<9.0",
     "pytest-socket>=0.7,<1.0",
     "ruff>=0.8,<1.0",
+]
+# Optional live AI provider. Never installed by CI or required for the base
+# application; the mock provider is the default and works without it.
+live-ai = [
+    "anthropic>=0.34,<1.0",
 ]
 
 [tool.pytest.ini_options]
