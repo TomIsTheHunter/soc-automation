@@ -278,7 +278,7 @@ This starts the real app, drives it with Playwright, and saves a full-page scree
 
 ## Roadmap
 
-Later stages may add an analyst-facing chat/investigation UI beyond the current demo view, richer audit/evidence export, and additional enrichment sources. See [docs/cv-project-summary.md](docs/cv-project-summary.md) for a condensed project summary.
+Later stages may add an analyst-facing chat/investigation UI beyond the current demo view, richer audit/evidence export, and additional enrichment sources. See [docs/cv-project-summary.md](docs/cv-project-summary.md) for a condensed project summary, [CHANGELOG.md](CHANGELOG.md) for release history, and [docs/copilot-development-notes.md](docs/copilot-development-notes.md) for notes on how AI-generated code was reviewed during development.
 
 ## License
 
