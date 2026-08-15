@@ -2,7 +2,7 @@
 
 An automation-first SOC workflow: ingest a synthetic security alert, enrich its indicators, apply explainable deterministic triage, and layer in bounded, validated AI-assisted investigation &mdash; with an analyst-facing demo view that makes every trust boundary visible.
 
-[![CI](https://github.com/example/soc-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/example/soc-automation/actions/workflows/ci.yml)
+> CI workflow status is configured in [.github/workflows/ci.yml](.github/workflows/ci.yml) but has not been verified on actual GitHub Actions infrastructure yet.
 
 ## Why This Exists
 
@@ -37,7 +37,7 @@ This repository processes a **CrowdStrike-style synthetic alert**. It is not an 
 - Safe failure handling for enrichment and AI failures, always failing closed to analyst review
 - A server-rendered analyst investigation view reusing the exact same pipeline as the API
 - Automated testing (unit, API, frontend, and one full end-to-end integration test), enforced offline via `pytest-socket`
-- GitHub Actions CI: lint, type checks, tests, dependency vulnerability audit, and a full-history secret scan
+- CI workflow configured for lint, type checks, tests, dependency vulnerability audit, and a full-history secret scan, but not yet executed on actual GitHub Actions infrastructure
 
 ## Architecture
 
