@@ -9,12 +9,12 @@ rather than scattered across commit messages and chat history.
   `uv.lock` is committed and used as the reproducible dependency source.
 - [VERIFIED] Python 3.12.10 was the interpreter used for local verification;
   no wider version matrix was tested.
-- [VERIFIED] The repository has been pushed to the real GitHub remote at
-  `https://github.com/TomIsTheHunter/soc-automation` and the workflow is
+- [VERIFIED] The repository is pushed to the real GitHub remote at
+  `https://github.com/TomIsTheHunter/soc-automation`, and the workflow is
   configured to trigger on the repository's current default branch (`master`).
-- [UNVERIFIED] CI (`.github/workflows/ci.yml`) has not successfully run on
-  actual GitHub Actions infrastructure; it has only been validated locally via
-  equivalent `ruff` / `mypy` / `pytest` commands.
+- [VERIFIED] CI (`.github/workflows/ci.yml`) has successfully run on actual
+  GitHub Actions infrastructure for the `master` branch. The latest run
+  completed successfully for both the `quality` and `secret-scan` jobs.
 
 ## Stage 1
 

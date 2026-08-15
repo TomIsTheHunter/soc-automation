@@ -4,7 +4,7 @@ An automation-first SOC workflow: ingest a synthetic security alert, enrich its 
 
 [![CI](https://github.com/TomIsTheHunter/soc-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/TomIsTheHunter/soc-automation/actions/workflows/ci.yml)
 
-> CI workflow status is configured in [.github/workflows/ci.yml](.github/workflows/ci.yml) but has not been verified on actual GitHub Actions infrastructure yet.
+> CI workflow status was verified on actual GitHub Actions infrastructure for the `master` branch: the `quality` and `secret-scan` jobs completed successfully.
 
 ## Why This Exists
 
