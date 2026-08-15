@@ -2,6 +2,8 @@
 
 An automation-first SOC workflow: ingest a synthetic security alert, enrich its indicators, apply explainable deterministic triage, and layer in bounded, validated AI-assisted investigation &mdash; with an analyst-facing demo view that makes every trust boundary visible.
 
+[![CI](https://github.com/TomIsTheHunter/soc-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/TomIsTheHunter/soc-automation/actions/workflows/ci.yml)
+
 > CI workflow status is configured in [.github/workflows/ci.yml](.github/workflows/ci.yml) but has not been verified on actual GitHub Actions infrastructure yet.
 
 ## Why This Exists
