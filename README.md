@@ -4,7 +4,7 @@ An automation-first SOC workflow: ingest a synthetic security alert, enrich its 
 
 [![CI](https://github.com/TomIsTheHunter/soc-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/TomIsTheHunter/soc-automation/actions/workflows/ci.yml)
 
-> CI workflow status was verified on actual GitHub Actions infrastructure for the `master` branch: the `quality` and `secret-scan` jobs completed successfully.
+> The GitHub Actions workflow is configured for the `master` branch, but its live status has not been confirmed from this environment. Local verification remains the evidence available here.
 
 ## Why This Exists
 
@@ -39,7 +39,7 @@ This repository processes a **CrowdStrike-style synthetic alert**. It is not an 
 - Safe failure handling for enrichment and AI failures, always failing closed to analyst review
 - A server-rendered analyst investigation view reusing the exact same pipeline as the API
 - Automated testing (unit, API, frontend, and one full end-to-end integration test), enforced offline via `pytest-socket`
-- CI workflow configured for lint, type checks, tests, dependency vulnerability audit, and a full-history secret scan, but not yet executed on actual GitHub Actions infrastructure
+- CI workflow configured for lint, type checks, tests, dependency vulnerability audit, and a full-history secret scan; live GitHub Actions success has not yet been confirmed from this environment
 
 ## Architecture
 

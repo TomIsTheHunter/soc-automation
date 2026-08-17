@@ -10,7 +10,10 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.api.routes import router
 from app.config import get_ai_provider_name, get_ai_timeout_seconds
 from app.enrichment.providers import MockEnrichmentProvider
-from app.investigation.assistant import InvestigationAssistant
+from app.investigation.assistant import (
+    InvestigationAssistant,
+    InvestigationUnavailableError,
+)
 from app.investigation.mock import MockInvestigationAssistant
 from app.web.routes import web_router
 
@@ -19,13 +22,27 @@ MAX_ALERT_BODY_BYTES = 256 * 1024
 logger = logging.getLogger(__name__)
 
 
-def select_investigation_assistant() -> InvestigationAssistant:
-    """Select the configured AI provider, always degrading safely to the mock.
+class UnavailableInvestigationAssistant(InvestigationAssistant):
+    """Explicitly unavailable AI assistant used when the configured live provider cannot start."""
 
-    The default (and CI/test) provider is always `mock`. If a live provider
-    is configured but unavailable (missing credentials, missing optional
-    SDK, or any construction error), the application logs a warning and
-    falls back to the mock provider rather than failing to start.
+    def __init__(self, provider_name: str) -> None:
+        self._provider_name = provider_name
+
+    async def investigate(self, context: object, timeout_seconds: float) -> dict[str, object]:
+        raise InvestigationUnavailableError(
+            "AI provider "
+            f"{self._provider_name!r} is unavailable; "
+            "deterministic triage remains authoritative"
+        )
+
+
+def select_investigation_assistant() -> InvestigationAssistant:
+    """Select the configured AI provider without silently substituting the mock.
+
+    `mock` is the default offline provider. Any explicit non-`mock` provider is
+    attempted live; if it cannot initialize, we keep an explicitly unavailable
+    assistant so the workflow can mark AI as degraded without pretending a live
+    result ever existed.
     """
     provider_name = get_ai_provider_name()
     if provider_name == "mock":
@@ -36,10 +53,12 @@ def select_investigation_assistant() -> InvestigationAssistant:
         return AnthropicInvestigationAssistant()
     except Exception:
         logger.warning(
-            "AI provider %r unavailable; falling back to the mock investigation assistant",
+            "AI provider %r is unavailable; "
+            "deterministic triage remains authoritative and no mock result "
+            "is substituted as if it were live",
             provider_name,
         )
-        return MockInvestigationAssistant()
+        return UnavailableInvestigationAssistant(provider_name)
 
 
 class AlertBodySizeLimitMiddleware:

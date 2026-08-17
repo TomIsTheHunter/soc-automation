@@ -12,9 +12,9 @@ rather than scattered across commit messages and chat history.
 - [VERIFIED] The repository is pushed to the real GitHub remote at
   `https://github.com/TomIsTheHunter/soc-automation`, and the workflow is
   configured to trigger on the repository's current default branch (`master`).
-- [VERIFIED] CI (`.github/workflows/ci.yml`) has successfully run on actual
-  GitHub Actions infrastructure for the `master` branch. The latest run
-  completed successfully for both the `quality` and `secret-scan` jobs.
+- [UNVERIFIED] GitHub Actions success for `.github/workflows/ci.yml` has not
+  been confirmed from this environment. The workflow is configured and local
+  quality checks pass, but no live run has been observed here.
 
 ## Stage 1
 
@@ -51,9 +51,10 @@ rather than scattered across commit messages and chat history.
   exercised against a real Anthropic account/API key and remains behind the
   `live-ai` extra as an optional, unverified path.
 - [VERIFIED] `AI_PROVIDER` values other than `"mock"` currently cause the app
-  to attempt the live provider path, with a safe fallback to the mock assistant
-  if construction fails; there is no plugin registry, and this remains a
-  simple configuration-driven design.
+  to attempt the live provider path. If that live provider cannot initialize, the
+  app keeps an explicitly unavailable assistant and the workflow marks AI as
+  unavailable instead of silently substituting a mock result; there is no plugin
+  registry, and this remains a simple configuration-driven design.
 - [VERIFIED] No fixture was added specifically for "prompt injection" alerts;
   injection-style text is constructed inline in `tests/test_ai_investigation.py`
   rather than added to `fixtures/alerts.py`, since it is only needed for the

@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from pytest_socket import disable_socket, enable_socket
 
+from app.investigation.assistant import InvestigationAssistant, InvestigationUnavailableError
 from app.investigation.mock import (
     FailingInvestigationAssistant,
     MalformedInvestigationAssistant,
@@ -27,8 +28,21 @@ from app.investigation.validation import (
     validate_investigation_result,
 )
 from app.main import create_app
-from app.models import AIConfidence, AIRiskAssessment, InvestigationResult, Severity, TriageDecision
-from app.models.workflow import Confidence, EnrichmentResult, Indicator, IndicatorType, Reputation
+from app.models import (
+    AIConfidence,
+    AIRiskAssessment,
+    InvestigationResult,
+    Severity,
+    TriageDecision,
+)
+from app.models.workflow import (
+    Confidence,
+    EnrichmentResult,
+    Indicator,
+    IndicatorType,
+    Reputation,
+    TriageResult,
+)
 
 
 def _run_async(coro: Any) -> Any:
@@ -213,6 +227,38 @@ def test_provider_unavailable_preserves_deterministic_triage(
     stages = [entry["stage"] for entry in body["processing_history"]]
     assert "ai_unavailable" in stages
     assert "analyst_review" in stages
+
+
+def test_explicit_live_provider_failure_does_not_silently_use_mock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.main as main_module
+    from app.investigation.context import build_investigation_context
+    from app.models.alert import NormalizedAlert
+
+    monkeypatch.setenv("AI_PROVIDER", "live")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    alert = NormalizedAlert(
+        source_alert_id="synthetic-live-unavailable",
+        timestamp=datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC),
+        hostname="workstation-99",
+        username="synthetic.user",
+        severity=Severity.HIGH,
+        detection_description="synthetic",
+    )
+    triage = TriageResult(
+        decision=TriageDecision.ESCALATE,
+        rules_triggered=["RULE_A_HIGH_RISK_MALICIOUS"],
+        reason="synthetic live provider failure regression",
+    )
+    context = build_investigation_context(alert, [], [], triage)
+
+    assistant = main_module.select_investigation_assistant()
+    assert assistant.__class__.__name__ == "UnavailableInvestigationAssistant"
+    assert isinstance(assistant, InvestigationAssistant)
+    with pytest.raises(InvestigationUnavailableError):
+        _run_async(assistant.investigate(context, 1.0))
 
 
 def test_provider_timeout_is_actually_enforced(
