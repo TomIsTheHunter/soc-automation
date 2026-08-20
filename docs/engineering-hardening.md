@@ -5,7 +5,7 @@
 - **Phase 1 — Baseline & Architecture: COMPLETE** (2026-08-20)
 - **Phase 2 — Engineering Debt Audit: COMPLETE** (2026-08-20) — 3 issues filed
 - **Phase 3 — Quality Tooling Baseline: COMPLETE** (2026-08-20) — all checks clean, no fixes needed
-- Phase 4 — CI Quality Gates: not started
+- **Phase 4 — CI Quality Gates: COMPLETE** (2026-08-20) — added `docker-build` job
 - Phase 5 — Wrap-Up: not started
 
 Secret Handling Protocol: `secret_leaks.md` created at repo root and added to
@@ -210,7 +210,49 @@ here for future reference, not filed as an issue.
 
 ## CI Changes
 
-(Not started — Phase 4.)
+**Existing pipeline reviewed first** ([.github/workflows/ci.yml](../.github/workflows/ci.yml)):
+the `quality` job already implements `Dependency install → Lint → Format
+check → Type check → Unit tests → Dependency vulnerability audit`
+(`uv sync` → `ruff check` → `ruff format --check` → `mypy` → `pytest` →
+`pip-audit`), and a separate `secret-scan` job runs full-history `gitleaks`.
+This already exceeds the Phase 4 minimum bar
+(`Dependency install → Lint → Type check → Unit tests`) — no duplicate or
+replacement tooling was introduced.
+
+**Gap found**: the repository ships a `Dockerfile` (used for local
+reproducibility per the README), but nothing in CI ever builds it — a
+broken `Dockerfile` could go unnoticed indefinitely.
+
+**Change applied** (confirmed via diff review before applying, commit
+follows): added a `docker-build` job that runs `docker build -t
+soc-automation:ci .` — the same command usable locally, no registry
+push, no new secrets, runs as its own parallel job so it doesn't slow down
+`quality`/`secret-scan`. No `continue-on-error` — it is a required gate
+like every other job.
+
+```diff
+   secret-scan:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+       - name: Gitleaks (full history)
+         uses: gitleaks/gitleaks-action@v2
+         env:
+           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++
++  docker-build:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - name: Build container image
++        run: docker build -t soc-automation:ci .
+```
+
+**Not changed**: triggers (`push`/`pull_request` on `master`), the existing
+`quality`/`secret-scan` jobs, and no registry push/publish step was added
+(out of scope — no deployment target exists for this portfolio project).
 
 ## Verification Gaps
 
@@ -226,3 +268,12 @@ here for future reference, not filed as an issue.
 - The `live-ai` (Anthropic) provider path in `app/investigation/live.py` is
   itself flagged `[UNVERIFIED]` in `docs/assumptions.md` — it has never been
   exercised against a real API key/account.
+- **Phase 4**: the new `docker-build` CI job was added without local
+  verification — Docker Desktop's engine was not running in this
+  environment, so `docker build .` could not be executed here first. The
+  Dockerfile itself is a simple, standard single-stage `pip install` build
+  with no obvious risk, but its first real verification will be the next
+  GitHub Actions run on `master`. **Action needed**: check the Actions tab
+  after pushing to confirm the `docker-build` job passes; if it fails, the
+  fix is scoped to the Dockerfile/job definition, not a reason to weaken
+  the gate.
