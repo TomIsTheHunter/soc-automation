@@ -5,8 +5,8 @@
 - **Phase 1 — Baseline & Architecture: COMPLETE** (2026-08-20)
 - **Phase 2 — Engineering Debt Audit: COMPLETE** (2026-08-20) — 3 issues filed
 - **Phase 3 — Quality Tooling Baseline: COMPLETE** (2026-08-20) — all checks clean, no fixes needed
-- **Phase 4 — CI Quality Gates: COMPLETE** (2026-08-20) — added `docker-build` job
-- Phase 5 — Wrap-Up: not started
+- **Phase 4 — CI Quality Gates: COMPLETE** (2026-08-20) — added `docker-build` job; pushed to `master` and verified green on GitHub Actions (run [32407729571](https://github.com/TomIsTheHunter/soc-automation/actions/runs/32407729571): `docker-build`, `quality`, `secret-scan` all passed)
+- **Phase 5 — Wrap-Up: COMPLETE** (2026-08-20) — see final report delivered in chat; this file's Status/Verification Gaps updated fully
 
 Secret Handling Protocol: `secret_leaks.md` created at repo root and added to
 `.gitignore` (committed alone, commit `f33ab2b`). No secrets found in the
@@ -256,24 +256,37 @@ like every other job.
 
 ## Verification Gaps
 
-- CI green-run status for `.github/workflows/ci.yml` was not independently
-  re-verified in this phase (matches the pre-existing `[UNVERIFIED]` note in
-  `docs/assumptions.md`). Phase 3 will run the equivalent commands locally.
-- No dedicated secret scan was run in Phase 1 beyond visual inspection of
-  the files read; CI already runs `gitleaks` on full history and `pip-audit`
-  on dependencies — Phase 2/3 should confirm these actually execute cleanly
-  rather than assume so.
-- Test suite was not executed in this phase (deliberately deferred to
-  Phase 3 per the working guide).
-- The `live-ai` (Anthropic) provider path in `app/investigation/live.py` is
-  itself flagged `[UNVERIFIED]` in `docs/assumptions.md` — it has never been
-  exercised against a real API key/account.
-- **Phase 4**: the new `docker-build` CI job was added without local
-  verification — Docker Desktop's engine was not running in this
-  environment, so `docker build .` could not be executed here first. The
-  Dockerfile itself is a simple, standard single-stage `pip install` build
-  with no obvious risk, but its first real verification will be the next
-  GitHub Actions run on `master`. **Action needed**: check the Actions tab
-  after pushing to confirm the `docker-build` job passes; if it fails, the
-  fix is scoped to the Dockerfile/job definition, not a reason to weaken
-  the gate.
+- CI green-run status for `.github/workflows/ci.yml`: **resolved**. Phase 3
+  confirmed lint/format/type-check/test/dependency-audit all pass locally;
+  Phase 4's push triggered a real GitHub Actions run
+  ([32407729571](https://github.com/TomIsTheHunter/soc-automation/actions/runs/32407729571))
+  which confirmed all three CI jobs (`docker-build`, `quality`,
+  `secret-scan`) pass on the actual remote pipeline, not just locally. This
+  also resolves the long-standing `[UNVERIFIED]` note in
+  `docs/assumptions.md` about CI status never having been confirmed live.
+- Secret scanning: **resolved for this audit's scope**. `gitleaks` (full
+  history) and `pip-audit` both ran clean as part of the same verified CI
+  run above. This is CI-level scanning of the repository as it exists
+  today; it does not retroactively guarantee no secret was ever transiently
+  present in history before this audit began (no evidence of one was found,
+  but this is a scan, not an exhaustive proof).
+- Test suite: **resolved**. 43 tests pass locally (Phase 3) and in CI
+  (Phase 4 run above).
+- The `live-ai` (Anthropic) provider path in `app/investigation/live.py`
+  remains **unverified** — flagged as such in `docs/assumptions.md` before
+  this audit began, and still true now. It has never been exercised against
+  a real API key/account, in this audit or previously. It is optional and
+  never required for the base application or CI, so this is a disclosed,
+  accepted gap rather than a blocking one.
+- The Docker image was never built or run locally in this environment
+  (Docker Desktop's engine was not running); its only verification is the
+  successful `docker build` in the CI run linked above. The image was never
+  smoke-tested (e.g. actually starting the container and hitting `/health`)
+  — only that the build itself succeeds. This is a narrower guarantee than
+  "the container works," worth knowing if the Dockerfile is relied on for
+  more than local reproducibility.
+- `secret_leaks.md`: created and gitignored per protocol; no entries were
+  ever added to it because no secrets were found during this audit. It
+  still exists locally and untracked — see the reminder in the final report
+  below.
+
