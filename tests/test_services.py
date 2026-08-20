@@ -6,7 +6,7 @@ from app.enrichment.table import SYNTHETIC_LOOKUP_TABLE
 from app.models import CrowdStrikeStyleAlert, IndicatorType, Reputation
 from app.services.indicators import extract_indicators
 from app.triage.engine import triage_alert
-from fixtures.alerts import AMBIGUOUS_ALERT, BENIGN_ALERT, HIGH_RISK_ALERT
+from fixtures.alerts import AMBIGUOUS_ALERT, BENIGN_ALERT, HIGH_RISK_ALERT, ZERO_INDICATOR_ALERT
 
 
 def test_adapter_isolated_from_fastapi() -> None:
@@ -75,3 +75,25 @@ def test_naive_timestamp_rejected() -> None:
     except ValueError:
         return
     raise AssertionError("naive timestamp was accepted")
+
+
+def test_zero_indicators_does_not_trigger_low_risk() -> None:
+    """Regression test for issue #1: no indicators is not the same as benign evidence.
+
+    Rule C must not fire on an empty `enrichment` list - that would mean
+    treating "nothing was reviewed" the same as "confirmed benign", for any
+    LOW/MEDIUM severity alert with no source_ip/destination_ip/file_hash.
+    """
+    normalized = CrowdStrikeStyleAlertAdapter().adapt(
+        CrowdStrikeStyleAlert.model_validate(ZERO_INDICATOR_ALERT)
+    )
+    assert extract_indicators(normalized) == []
+
+    result = triage_alert(normalized, [], enrichment_available=True)
+    assert result.decision == "ANALYST_REVIEW"
+    assert result.rules_triggered == ["RULE_D_AMBIGUOUS_CATCH_ALL"]
+
+    medium_severity = normalized.model_copy(update={"severity": "MEDIUM"})
+    result = triage_alert(medium_severity, [], enrichment_available=True)
+    assert result.decision == "ANALYST_REVIEW"
+    assert result.rules_triggered == ["RULE_D_AMBIGUOUS_CATCH_ALL"]

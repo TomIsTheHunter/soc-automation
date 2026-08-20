@@ -40,6 +40,9 @@ def triage_alert(
 
     if (
         alert.severity in {Severity.LOW, Severity.MEDIUM}
+        # `enrichment` must be non-empty: no indicators means nothing was
+        # actually reviewed, which is not the same as confirmed-benign evidence.
+        and enrichment
         and reputations
         <= {
             Reputation.BENIGN,

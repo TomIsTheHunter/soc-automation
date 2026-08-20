@@ -49,3 +49,15 @@ AMBIGUOUS_ALERT: dict[str, Any] = {
     ),
     "source": "crowdstrike-style-synthetic",
 }
+
+ZERO_INDICATOR_ALERT: dict[str, Any] = {
+    "alert_id": "synthetic-zero-indicator-001",
+    "timestamp": "2026-01-15T12:15:00Z",
+    "hostname": "workstation-10",
+    "username": "synthetic.user",
+    "severity": "LOW",
+    "detection_description": (
+        "Synthetic low-severity detection with no source/destination IP or file hash."
+    ),
+    "source": "crowdstrike-style-synthetic",
+}
