@@ -1,4 +1,7 @@
+import logging
 from typing import Any
+
+import pytest
 
 from app.enrichment.providers import FailingEnrichmentProvider
 from app.main import create_app
@@ -93,3 +96,32 @@ def test_malformed_and_oversized_payloads(client: Any, high_risk_alert: dict[str
     )
     assert oversized.status_code == 413
     assert oversized.json()["error"]["code"] == "request_too_large"
+
+
+def test_rejected_requests_are_logged_server_side(
+    client: Any, high_risk_alert: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression test for issue #2: rejections must leave a server-side trace."""
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        oversized = client.post(
+            "/api/v1/alerts",
+            content=b"x" * (256 * 1024 + 1),
+            headers={"content-type": "application/json"},
+        )
+        missing = high_risk_alert.copy()
+        del missing["hostname"]
+        invalid = client.post("/api/v1/alerts", json=missing)
+        unsupported_payload = high_risk_alert.copy()
+        unsupported_payload["source"] = "unsupported"
+        unsupported = client.post("/api/v1/alerts", json=unsupported_payload)
+
+    assert oversized.status_code == 413
+    assert invalid.status_code == 422
+    assert unsupported.status_code == 422
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Rejected oversized request body" in message for message in messages)
+    assert any("Rejected invalid request" in message for message in messages)
+    assert any(
+        "Rejected request" in message and "unsupported alert source" in message
+        for message in messages
+    )

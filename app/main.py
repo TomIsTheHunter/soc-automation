@@ -73,6 +73,12 @@ class AlertBodySizeLimitMiddleware:
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         content_length = headers.get(b"content-length")
         if content_length is not None and int(content_length) > self.max_bytes:
+            logger.warning(
+                "Rejected oversized request body: path=%s content_length=%s max_bytes=%d",
+                scope.get("path"),
+                content_length.decode("latin-1"),
+                self.max_bytes,
+            )
             response = JSONResponse(
                 status_code=413,
                 content={
@@ -131,8 +137,16 @@ def create_app(
 
     @application.exception_handler(RequestValidationError)
     async def validation_exception_handler(
-        _request: Request, exc: RequestValidationError
+        request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        # Log only field locations/types, never field values - the request body
+        # may contain attacker-controlled or sensitive content.
+        logger.warning(
+            "Rejected invalid request: method=%s path=%s errors=%s",
+            request.method,
+            request.url.path,
+            [{"loc": error.get("loc"), "type": error.get("type")} for error in exc.errors()],
+        )
         return JSONResponse(
             status_code=422,
             content={
@@ -145,8 +159,15 @@ def create_app(
         )
 
     @application.exception_handler(HTTPException)
-    async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         message = str(exc.detail) if isinstance(exc.detail, str) else "request failed"
+        logger.warning(
+            "Rejected request: method=%s path=%s status=%d detail=%s",
+            request.method,
+            request.url.path,
+            exc.status_code,
+            message,
+        )
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": "request_error", "message": message}},
