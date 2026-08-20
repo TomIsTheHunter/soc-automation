@@ -4,7 +4,7 @@
 
 - **Phase 1 — Baseline & Architecture: COMPLETE** (2026-08-20)
 - **Phase 2 — Engineering Debt Audit: COMPLETE** (2026-08-20) — 3 issues filed
-- Phase 3 — Quality Tooling Baseline: not started
+- **Phase 3 — Quality Tooling Baseline: COMPLETE** (2026-08-20) — all checks clean, no fixes needed
 - Phase 4 — CI Quality Gates: not started
 - Phase 5 — Wrap-Up: not started
 
@@ -176,7 +176,37 @@ because the existing behavior was judged reasonable:
 
 ## Tooling Baseline
 
-(Not started — Phase 3.)
+All commands run locally (Python 3.12, `.venv`, `uv sync --extra dev` already
+installed), matching exactly what `.github/workflows/ci.yml` and the
+`Makefile` already run — no new tooling introduced, no existing config
+replaced.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `ruff check .` | **Clean** — "All checks passed!" |
+| Format | `ruff format --check .` | **Clean** — "40 files already formatted" |
+| Type check | `mypy app tests` (strict mode, per `pyproject.toml`) | **Clean** — "Success: no issues found in 37 source files" |
+| Tests | `python -m pytest -q` | **Clean** — 43 passed in 1.88s (offline, `--disable-socket` enforced) |
+| Dependency audit | `uv export --extra dev --no-hashes` + `pip-audit` | **Clean** — "No known vulnerabilities found" across 69 resolved packages |
+
+**Suppressions reviewed** (none newly found in Phase 3; carried over from
+Phase 2 for completeness): exactly one `# noqa: BLE001`
+([app/investigation/live.py](../app/investigation/live.py), broad except on
+the optional live-provider SDK call, already judged reasonable) and one
+`# type: ignore[import-not-found]` (same file, lazy `import anthropic` for
+an optional extra never installed by CI — the ignore is correct because the
+SDK's types are genuinely unavailable in the base environment). No
+globally-disabled rules exist in `pyproject.toml` (`ruff` `select` list has
+no matching `ignore`, mypy has no per-module overrides). Nothing was
+weakened and no fixes were required to reach a clean baseline.
+
+**Observation (not a finding)**: there is no coverage-measurement tool
+(e.g. `pytest-cov`) wired in. Phase 3's scope is lint/format/type-check/test
+execution, not coverage measurement, and the existing test suite already
+demonstrates thorough manual attention to failure-path coverage (see Phase
+2 notes) — introducing a coverage tool now would be adding new tooling
+rather than establishing a baseline of what exists, so it is only recorded
+here for future reference, not filed as an issue.
 
 ## CI Changes
 
