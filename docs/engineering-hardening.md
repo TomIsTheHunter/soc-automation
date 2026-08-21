@@ -7,6 +7,9 @@
 - **Phase 3 — Quality Tooling Baseline: COMPLETE** (2026-08-20) — all checks clean, no fixes needed
 - **Phase 4 — CI Quality Gates: COMPLETE** (2026-08-20) — added `docker-build` job; pushed to `master` and verified green on GitHub Actions (run [32407729571](https://github.com/TomIsTheHunter/soc-automation/actions/runs/32407729571): `docker-build`, `quality`, `secret-scan` all passed)
 - **Phase 5 — Wrap-Up: COMPLETE** (2026-08-20) — see final report delivered in chat; this file's Status/Verification Gaps updated fully
+- **Post-audit remediation: COMPLETE** (2026-08-20/21) — all 3 filed issues
+  (#1, #2, #3) fixed, tested, and closed; see Findings Log for commit
+  references and CI run [32435854241](https://github.com/TomIsTheHunter/soc-automation/actions/runs/32435854241)
 
 Secret Handling Protocol: `secret_leaks.md` created at repo root and added to
 `.gitignore` (committed alone, commit `f33ab2b`). No secrets found in the
@@ -170,9 +173,16 @@ because the existing behavior was judged reasonable:
 
 **Filed** (confirmed by user 2026-08-20):
 
-- F1 (P0) → [issues/1](https://github.com/TomIsTheHunter/soc-automation/issues/1)
-- F2 (P1) → [issues/2](https://github.com/TomIsTheHunter/soc-automation/issues/2)
-- F3 (P2) → [issues/3](https://github.com/TomIsTheHunter/soc-automation/issues/3)
+- F1 (P0) → [issues/1](https://github.com/TomIsTheHunter/soc-automation/issues/1) — **RESOLVED** (commit `54d2e3a`, closed 2026-08-20/21): Rule C now requires non-empty `enrichment`; zero-indicator LOW/MEDIUM alerts fall through to `RULE_D_AMBIGUOUS_CATCH_ALL`/`ANALYST_REVIEW`. Regression test added (`tests/test_services.py`) plus a new `ZERO_INDICATOR_ALERT` fixture.
+- F2 (P1) → [issues/2](https://github.com/TomIsTheHunter/soc-automation/issues/2) — **RESOLVED** (commit `8e61275`): `app/main.py`'s validation handler, HTTP exception handler, and the oversized-body middleware branch now all log a `logger.warning` (method/path/reason only, never raw body content). Regression test added (`tests/test_api.py`) using `caplog`.
+- F3 (P2) → [issues/3](https://github.com/TomIsTheHunter/soc-automation/issues/3) — **RESOLVED** (commit `f5cc61a`): `get_ai_timeout_seconds()` now rejects non-positive values, falling back to the default with a warning log. New `tests/test_config.py` covers missing/valid/non-positive/non-numeric cases.
+
+All three fixes verified locally (ruff/mypy/pytest clean, 51 tests) and on a
+real GitHub Actions run
+([32435854241](https://github.com/TomIsTheHunter/soc-automation/actions/runs/32435854241),
+`quality`/`secret-scan`/`docker-build` all passed) after pushing to
+`master`. All three issues auto-closed via `Fixes #N` commit-message
+keywords.
 
 ## Tooling Baseline
 
