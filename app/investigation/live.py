@@ -11,7 +11,6 @@ missing credentials degrades safely to `InvestigationUnavailableError`
 import asyncio
 import json
 import logging
-import os
 from typing import Any
 
 from app.investigation.assistant import InvestigationAssistant, InvestigationUnavailableError
@@ -27,13 +26,14 @@ LIVE_PROVIDER_NAME = "anthropic-live"
 class AnthropicInvestigationAssistant(InvestigationAssistant):
     """Live provider behind the same bounded interface as the mock provider.
 
-    Requires the optional `live-ai` extra and an `ANTHROPIC_API_KEY`
-    environment variable. Credentials are never read from anywhere else and
-    are never committed to the repository.
+    Requires the optional `live-ai` extra and an API key, passed in
+    explicitly by the caller (`app/main.py`, sourced from
+    `app.config.Settings.anthropic_api_key`). This class never reads
+    `os.environ` itself - the centralized `Settings` model is the single
+    place credentials are read from.
     """
 
-    def __init__(self, model: str | None = None) -> None:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    def __init__(self, api_key: str | None, model: str | None = None) -> None:
         if not api_key:
             raise InvestigationUnavailableError("ANTHROPIC_API_KEY is not configured")
         try:

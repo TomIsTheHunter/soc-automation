@@ -189,6 +189,46 @@ def test_low_risk_fixture_maps_to_low_confidence_high(
             },
             id="invalid_data_type",
         ),
+        pytest.param(
+            {
+                "schema_version": 1,
+                "provider_name": "mock",
+                "summary": "x" * 2001,
+                "key_evidence": [],
+                "risk_assessment": "LOW",
+                "recommended_actions": ["no_further_action_recommended"],
+                "confidence": "HIGH",
+                "uncertainties": [],
+            },
+            id="oversized_summary_field",
+        ),
+        pytest.param(
+            {
+                "schema_version": 1,
+                "provider_name": "mock",
+                "summary": "x",
+                "key_evidence": [f"evidence-{i}" for i in range(21)],
+                "risk_assessment": "LOW",
+                "recommended_actions": ["no_further_action_recommended"],
+                "confidence": "HIGH",
+                "uncertainties": [],
+            },
+            id="oversized_key_evidence_list",
+        ),
+        pytest.param(
+            {
+                "schema_version": 1,
+                "provider_name": "mock",
+                "summary": "x",
+                "key_evidence": [],
+                "risk_assessment": "LOW",
+                "recommended_actions": ["no_further_action_recommended"],
+                "confidence": "HIGH",
+                "uncertainties": [],
+                "nested_unexpected_structure": {"a": {"b": ["c", "d"]}},
+            },
+            id="unexpected_nested_data",
+        ),
     ],
 )
 def test_malformed_ai_output_rejected(

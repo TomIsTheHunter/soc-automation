@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.routes import router
-from app.config import get_ai_provider_name, get_ai_timeout_seconds
+from app.config import DEFAULT_MAX_ALERT_BODY_BYTES, Settings, get_settings
 from app.enrichment.providers import MockEnrichmentProvider
 from app.investigation.assistant import (
     InvestigationAssistant,
@@ -17,8 +17,6 @@ from app.investigation.assistant import (
 from app.investigation.mock import MockInvestigationAssistant
 from app.models import ErrorDetail, ErrorResponse
 from app.web.routes import web_router
-
-MAX_ALERT_BODY_BYTES = 256 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,7 @@ class UnavailableInvestigationAssistant(InvestigationAssistant):
         )
 
 
-def select_investigation_assistant() -> InvestigationAssistant:
+def select_investigation_assistant(settings: Settings | None = None) -> InvestigationAssistant:
     """Select the configured AI provider without silently substituting the mock.
 
     `mock` is the default offline provider. Any explicit non-`mock` provider is
@@ -45,13 +43,17 @@ def select_investigation_assistant() -> InvestigationAssistant:
     assistant so the workflow can mark AI as degraded without pretending a live
     result ever existed.
     """
-    provider_name = get_ai_provider_name()
+    settings = settings or get_settings()
+    provider_name = settings.ai_provider
     if provider_name == "mock":
         return MockInvestigationAssistant()
     try:
         from app.investigation.live import AnthropicInvestigationAssistant
 
-        return AnthropicInvestigationAssistant()
+        api_key = (
+            settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
+        )
+        return AnthropicInvestigationAssistant(api_key=api_key)
     except Exception:
         logger.warning(
             "AI provider %r is unavailable; "
@@ -63,7 +65,7 @@ def select_investigation_assistant() -> InvestigationAssistant:
 
 
 class AlertBodySizeLimitMiddleware:
-    def __init__(self, app: ASGIApp, max_bytes: int = MAX_ALERT_BODY_BYTES) -> None:
+    def __init__(self, app: ASGIApp, max_bytes: int = DEFAULT_MAX_ALERT_BODY_BYTES) -> None:
         self.app = app
         self.max_bytes = max_bytes
 
@@ -84,7 +86,8 @@ class AlertBodySizeLimitMiddleware:
                 status_code=413,
                 content=ErrorResponse(
                     error=ErrorDetail(
-                        code="request_too_large", message="request body exceeds 256 KiB"
+                        code="request_too_large",
+                        message=f"request body exceeds {self.max_bytes} bytes",
                     )
                 ).model_dump(mode="json"),
             )
@@ -98,7 +101,9 @@ def create_app(
     enrichment_provider: object | None = None,
     investigation_assistant: InvestigationAssistant | None = None,
     ai_timeout_seconds: float | None = None,
+    settings: Settings | None = None,
 ) -> FastAPI:
+    settings = settings or get_settings()
     application = FastAPI(
         title="SOC Automation Platform",
         description=(
@@ -115,14 +120,19 @@ def create_app(
             }
         ],
     )
+    application.state.settings = settings
     application.state.enrichment_provider = enrichment_provider or MockEnrichmentProvider()
     application.state.investigation_assistant = (
-        investigation_assistant or select_investigation_assistant()
+        investigation_assistant or select_investigation_assistant(settings)
     )
     application.state.ai_timeout_seconds = (
-        ai_timeout_seconds if ai_timeout_seconds is not None else get_ai_timeout_seconds()
+        ai_timeout_seconds
+        if ai_timeout_seconds is not None
+        else settings.ai_provider_timeout_seconds
     )
-    application.add_middleware(AlertBodySizeLimitMiddleware)
+    application.add_middleware(
+        AlertBodySizeLimitMiddleware, max_bytes=settings.max_alert_body_bytes
+    )
     application.mount(
         "/static",
         StaticFiles(directory=str(Path(__file__).parent / "web" / "static")),

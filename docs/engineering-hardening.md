@@ -10,12 +10,20 @@
 - **Post-audit remediation: COMPLETE** (2026-08-20/21) — all 3 filed issues
   (#1, #2, #3) fixed, tested, and closed; see Findings Log for commit
   references and CI run [32435854241](https://github.com/TomIsTheHunter/soc-automation/actions/runs/32435854241)
+- **Phase 6 — Configuration, Secrets & Secure Boundaries: COMPLETE** (2026-08-21)
+  — centralized typed `Settings` (`pydantic-settings`) replacing scattered
+  `os.environ` reads; repository + full-history secrets audit found nothing
+  (no new findings); `.env.example` kept placeholder-only; input-boundary
+  and AI-output-boundary test coverage extended. See Findings Log entry
+  below for full detail.
 
 Secret Handling Protocol: `secret_leaks.md` created at repo root and added to
 `.gitignore` (committed alone, commit `f33ab2b`). No secrets found in the
 repository during Phase 1 inspection (see Verification Gaps — this was a
 read-through, not a dedicated scan; Phase 2/3 includes `gitleaks`/`pip-audit`
-already wired into CI).
+already wired into CI). Phase 6 repeated this as a dedicated, explicit
+audit (tracked repo + full `git log --all -p` history scan for common
+secret patterns) and again found nothing.
 
 ## Architecture Map
 
@@ -183,6 +191,72 @@ real GitHub Actions run
 `quality`/`secret-scan`/`docker-build` all passed) after pushing to
 `master`. All three issues auto-closed via `Fixes #N` commit-message
 keywords.
+
+### Phase 6 — Configuration, Secrets & Secure Boundaries (2026-08-21)
+
+**Secrets audit (repository-wide, dedicated pass)**: grepped the tracked
+working tree for credential-shaped patterns (`sk-...`, `AKIA...`,
+`-----BEGIN`, `password=`/`api_key=` literals, credential-bearing URLs) and
+separately ran `git log --all -p` over the same patterns to cover full
+history, not just the current tree. **No findings** — nothing added to
+`secret_leaks.md`, no P0 filed. This is in addition to (not a replacement
+for) CI's `gitleaks` full-history job, which continues to run on every
+push.
+
+**Configuration centralized**: `app/config.py` now exposes a single typed
+`Settings(BaseSettings)` (via `pydantic-settings`, added as a new pinned
+dependency) instead of two standalone `os.environ`-reading functions.
+`ANTHROPIC_API_KEY` — previously read directly from `os.environ` inside
+`app/investigation/live.py` — is now a `SecretStr` field on `Settings`,
+passed in explicitly by `app/main.py`; `live.py` no longer touches
+`os.environ` at all. Added one new setting, `MAX_ALERT_BODY_BYTES`
+(previously a hardcoded `256 * 1024` constant in `app/main.py`), with a
+deliberately different missing-value strategy than the two pre-existing
+settings: it **fails fast** (`pydantic.ValidationError` at startup) on an
+invalid value, whereas `AI_PROVIDER`/`AI_PROVIDER_TIMEOUT_SECONDS`
+**degrade gracefully** to their defaults with a warning log (preserving the
+exact behavior from issue #3). Full rationale in
+[docs/configuration.md](configuration.md).
+
+**Considered and deliberately not added** (to avoid inventing
+unsupported requirements): an `ENVIRONMENT`/`LOG_LEVEL` setting. Audited
+the codebase for any existing environment-differentiated behavior or
+logging-level configuration — there is none (the app has no dev/staging/
+prod branching logic anywhere, and no logging level is ever configured
+beyond Python's defaults). Adding an unused setting would be
+over-engineering; recorded here rather than silently skipped. Also
+audited for numeric-configurable "confidence thresholds" — none exist
+(`triage/engine.py` and the AI confidence/risk fields are categorical
+enums, not numeric thresholds), so there was nothing to centralize there.
+
+**Input boundary strengthening**: the existing `CrowdStrikeStyleAlert`/
+`InvestigationResult` models already enforced strict boundaries
+(`extra="forbid"`, explicit lengths/patterns, controlled enums) prior to
+this phase — deliberately did **not** weaken or duplicate that logic.
+Added `tests/test_input_validation.py` (20 tests) proving the full
+malformed-input matrix requested for this phase (missing/empty alert ID,
+invalid/naive/non-numeric timestamps, unknown severity, wrong-typed
+severity, invalid IP/hash IOC values, oversized fields, unexpected nested
+data, wrong-typed fields, missing required fields) is rejected at the
+Pydantic model boundary, not deeper in the pipeline. Extended the existing
+`test_malformed_ai_output_rejected` parametrization in
+`tests/test_ai_investigation.py` with oversized-summary,
+oversized-key-evidence-list, and unexpected-nested-data cases for the AI
+output boundary.
+
+**Observation, not a new finding**: confirmed (via direct model
+inspection) that Pydantic's default datetime parsing accepts integer/float
+Unix-epoch values as valid, unambiguous UTC timestamps for the `timestamp`
+field — this is standard Pydantic v2 behavior, not a defect, and was not
+changed. Noted here for future reference since the phase's own test list
+specifically calls out "invalid timestamp" handling.
+
+**Verification**: `ruff check`/`ruff format --check`/`mypy --strict`
+clean; full suite 81 passed (was 51 before this phase — added 20 in
+`tests/test_input_validation.py`, 3 in the AI-output parametrization, and
+rewrote `tests/test_config.py` for the new `Settings` model); `pip-audit`
+(scoped via `uv export --extra dev`, matching `make audit`) clean with the
+new `pydantic-settings`/`python-dotenv` dependencies included.
 
 ## Tooling Baseline
 
