@@ -15,6 +15,7 @@ from app.investigation.assistant import (
     InvestigationUnavailableError,
 )
 from app.investigation.mock import MockInvestigationAssistant
+from app.models import ErrorDetail, ErrorResponse
 from app.web.routes import web_router
 
 MAX_ALERT_BODY_BYTES = 256 * 1024
@@ -81,12 +82,11 @@ class AlertBodySizeLimitMiddleware:
             )
             response = JSONResponse(
                 status_code=413,
-                content={
-                    "error": {
-                        "code": "request_too_large",
-                        "message": "request body exceeds 256 KiB",
-                    }
-                },
+                content=ErrorResponse(
+                    error=ErrorDetail(
+                        code="request_too_large", message="request body exceeds 256 KiB"
+                    )
+                ).model_dump(mode="json"),
             )
             await response(scope, receive, send)
             return
@@ -149,13 +149,13 @@ def create_app(
         )
         return JSONResponse(
             status_code=422,
-            content={
-                "error": {
-                    "code": "validation_error",
-                    "message": "request validation failed",
-                    "details": exc.errors(),
-                }
-            },
+            content=ErrorResponse(
+                error=ErrorDetail(
+                    code="validation_error",
+                    message="request validation failed",
+                    details=[dict(error) for error in exc.errors()],
+                )
+            ).model_dump(mode="json"),
         )
 
     @application.exception_handler(HTTPException)
@@ -170,7 +170,9 @@ def create_app(
         )
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error": {"code": "request_error", "message": message}},
+            content=ErrorResponse(
+                error=ErrorDetail(code="request_error", message=message)
+            ).model_dump(mode="json"),
         )
 
     @application.exception_handler(Exception)
@@ -178,7 +180,9 @@ def create_app(
         logging.getLogger(__name__).exception("Unhandled application error", exc_info=exc)
         return JSONResponse(
             status_code=500,
-            content={"error": {"code": "internal_error", "message": "an internal error occurred"}},
+            content=ErrorResponse(
+                error=ErrorDetail(code="internal_error", message="an internal error occurred")
+            ).model_dump(mode="json"),
         )
 
     return application

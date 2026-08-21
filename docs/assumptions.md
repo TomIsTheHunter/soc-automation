@@ -12,9 +12,11 @@ rather than scattered across commit messages and chat history.
 - [VERIFIED] The repository is pushed to the real GitHub remote at
   `https://github.com/TomIsTheHunter/soc-automation`, and the workflow is
   configured to trigger on the repository's current default branch (`master`).
-- [UNVERIFIED] GitHub Actions success for `.github/workflows/ci.yml` has not
-  been confirmed from this environment. The workflow is configured and local
-  quality checks pass, but no live run has been observed here.
+- [VERIFIED] GitHub Actions success for `.github/workflows/ci.yml` was
+  confirmed on a live run against the real remote
+  (`quality`/`secret-scan`/`docker-build` all passed; see
+  [docs/engineering-hardening.md](engineering-hardening.md) Phase 4/5 for the
+  run links), not just via local quality checks.
 
 ## Stage 1
 

@@ -13,7 +13,7 @@ from app.adapters.crowdstrike import UnsupportedSourceError
 from app.enrichment.providers import EnrichmentProvider, FailingEnrichmentProvider
 from app.investigation.assistant import InvestigationAssistant
 from app.investigation.mock import FailingInvestigationAssistant
-from app.models import CrowdStrikeStyleAlert, ProcessingResponse
+from app.models import CrowdStrikeStyleAlert, ErrorResponse, ProcessingResponse
 from app.services.workflow import run_alert_workflow
 
 router = APIRouter(prefix="/api/v1", tags=["alerts"])
@@ -47,7 +47,10 @@ def ai_timeout_from_request(request: Request) -> float:
     "/alerts",
     response_model=ProcessingResponse,
     status_code=status.HTTP_200_OK,
-    responses={413: {"description": "Request body exceeds the configured limit"}},
+    responses={
+        413: {"description": "Request body exceeds the configured limit", "model": ErrorResponse},
+        422: {"description": "Validation or unsupported-source error", "model": ErrorResponse},
+    },
 )
 async def ingest_alert(
     payload: CrowdStrikeStyleAlert,

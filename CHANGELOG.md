@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+Post-release engineering hardening (see [docs/engineering-hardening.md](docs/engineering-hardening.md)).
+
+### Fixed
+
+- Deterministic triage Rule C no longer treats a zero-indicator alert (no
+  extractable IP/hash) as benign evidence; it now falls through to the
+  `ANALYST_REVIEW` catch-all instead of silently returning `LOW_RISK`.
+- Rejected requests (422 validation errors, 413 oversized bodies, and other
+  HTTP errors) are now logged server-side (method/path/reason only, never
+  raw body content), closing a previously silent observability gap.
+- `AI_PROVIDER_TIMEOUT_SECONDS` now rejects non-positive values at startup,
+  falling back to the documented default with a warning instead of causing
+  the AI assistant to silently and permanently time out.
+
+### Changed
+
+- CI now also builds the Docker image (`docker-build` job) so a broken
+  `Dockerfile` can't go unnoticed.
+- Error responses (`app/main.py`) are now built from the shared
+  `ErrorDetail`/`ErrorResponse` Pydantic models instead of untyped literal
+  dicts, and `POST /api/v1/alerts` documents its `413`/`422` error shape in
+  the OpenAPI schema.
+
 ## [0.2.0] - 2026-08-14
 
 First tagged release: the complete three-stage SOC Automation Vertical Slice.

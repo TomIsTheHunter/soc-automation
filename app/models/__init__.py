@@ -4,6 +4,7 @@ from app.models.alert import (
     NormalizedAlert,
     Severity,
 )
+from app.models.errors import ErrorDetail, ErrorResponse
 from app.models.investigation import (
     INVESTIGATION_RESULT_SCHEMA_VERSION,
     AIAssistedAnalysis,
@@ -40,6 +41,8 @@ __all__ = [
     "CrowdStrikeStyleAlert",
     "DeterministicTriageContext",
     "EnrichmentResult",
+    "ErrorDetail",
+    "ErrorResponse",
     "Indicator",
     "IndicatorType",
     "InvestigationAlertContext",
