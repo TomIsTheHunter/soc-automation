@@ -16,6 +16,16 @@
   (no new findings); `.env.example` kept placeholder-only; input-boundary
   and AI-output-boundary test coverage extended. See Findings Log entry
   below for full detail.
+- **Phase 7 — Error Handling & Failure Engineering: COMPLETE** (2026-08-24)
+  — modeled every external dependency's failure modes; added explicit,
+  bounded retry configuration (`AI_LIVE_MAX_RETRIES`) for the live AI
+  provider, delegating backoff to the Anthropic SDK's own tested retry
+  policy rather than re-implementing it; classified provider exceptions
+  (auth/permission vs. rate-limit vs. connection/status vs. unexpected)
+  for observability while still collapsing all of them to a single
+  `InvestigationUnavailableError` at the application boundary. New ADR:
+  [docs/adr/001-failure-handling.md](adr/001-failure-handling.md). See
+  Findings Log entry below for full detail.
 
 Secret Handling Protocol: `secret_leaks.md` created at repo root and added to
 `.gitignore` (committed alone, commit `f33ab2b`). No secrets found in the
@@ -257,6 +267,78 @@ clean; full suite 81 passed (was 51 before this phase — added 20 in
 rewrote `tests/test_config.py` for the new `Settings` model); `pip-audit`
 (scoped via `uv export --extra dev`, matching `make audit`) clean with the
 new `pydantic-settings`/`python-dotenv` dependencies included.
+
+### Phase 7 — Error Handling & Failure Engineering (2026-08-24)
+
+**Model of external dependencies (before changing anything)**: the only
+real external network dependency in the codebase is the live Anthropic AI
+provider (`app/investigation/live.py`) — the enrichment provider seam
+(`app/enrichment/providers.py`) has no real implementation yet, only an
+in-memory synthetic lookup table, so it has no network failure modes to
+model or retry. The full failure matrix (timeout, auth, rate-limit, 5xx,
+malformed response, connection failure, unexpected exception) and the
+retry classification for each is written up in
+[docs/adr/001-failure-handling.md](adr/001-failure-handling.md) rather
+than duplicated here.
+
+**Audit finding**: prior to this phase, `app/investigation/live.py` caught
+every SDK failure with one bare `except Exception`, collapsing distinct
+failure categories (invalid credentials, rate limiting, connection
+failure, server error) into a single generic log message, and never
+retried anything — leaving `AI_PROVIDER_TIMEOUT_SECONDS` as the only
+resilience knob for a real network dependency. This was judged
+insufficient for a "production-oriented" failure model given the phase's
+brief, even though the existing degrade-safely behavior itself was already
+correct.
+
+**Change applied**: `app/investigation/live.py` now classifies the
+Anthropic SDK's exception hierarchy into three logged categories
+(auth/permission - never retried; rate-limit/connection/status - already
+bounded-retried by the SDK; unexpected - caught defensively) while still
+collapsing all of them to the single `InvestigationUnavailableError` the
+rest of the application already knew how to handle, so no other module
+needed to change. A new `AI_LIVE_MAX_RETRIES` setting
+(`Settings.ai_live_max_retries`, default 2, same graceful-degrade
+validation pattern as `AI_PROVIDER_TIMEOUT_SECONDS`) makes the retry bound
+explicit and configurable rather than relying on an undocumented SDK
+default, and is passed through `app/main.py: select_investigation_assistant`
+into the SDK client's own `max_retries=`. Deliberately **not**
+re-implemented as an application-level retry loop: the SDK's
+backoff/jitter/`Retry-After` handling is already correct and tested
+upstream, so duplicating it would be pure risk for no benefit.
+
+**Considered and deliberately not done**: adding new custom exception
+classes (`ProviderTimeout`, `InvalidProviderResponse`, etc.) as suggested
+conceptually by the phase brief. The existing exception set
+(`EnrichmentUnavailableError`, `InvestigationUnavailableError`,
+`InvestigationValidationError` with a `InvestigationRejectionReason`, and
+the built-in `TimeoutError`) already covers every one of those concepts
+without ambiguity; adding parallel types would have violated the phase's
+own "do not create dozens of custom exceptions" guidance. Also considered
+and rejected: retry logic around the enrichment provider — it is a
+synthetic in-memory dict lookup with no real failure mode a retry could
+possibly fix, so adding one would be pure over-engineering (documented in
+the ADR's retry table instead of silently skipped).
+
+**Tests added**: `tests/test_live_provider.py` (new, 11 tests) — the only
+tests in the suite that exercise `app/investigation/live.py` directly, via
+a minimal fake `anthropic` module injected into `sys.modules` (the real
+SDK is an optional extra never installed in this environment or CI).
+Covers: explicit/default bounded `max_retries` configuration, HTTP 401/403
+not retried, HTTP 429/503/connection-failure surfaced correctly (single
+call from this module's perspective either way, since the SDK's own retry
+loop is internal to the one awaited call), an unexpected exception
+degrading safely, a malformed (non-JSON) response being rejected, the
+call-site timeout still being enforced, and the happy path. Extended
+`tests/test_config.py` with 3 new tests for `AI_LIVE_MAX_RETRIES`
+(negative/non-numeric degrade to default with a warning; `0` is accepted
+as a deliberate "disable retries" choice, not an error).
+
+**Verification**: `ruff check`/`ruff format --check`/`mypy --strict`
+clean; full suite 95 passed (was 81 before this phase — 14 new: 11 in
+`tests/test_live_provider.py`, 3 in `tests/test_config.py`); `pip-audit`
+(scoped via `uv export --extra dev`, matching `make audit`) clean — no new
+runtime dependencies were added by this phase.
 
 ## Tooling Baseline
 

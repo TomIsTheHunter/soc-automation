@@ -46,9 +46,10 @@ considered "extra".
 | `AI_PROVIDER` | `ai_provider` | `"mock"` | No | Empty/whitespace-only value **degrades** to the default with a `logger.warning` (see below). Any other non-empty value is used as-is - see "AI provider selection" below for what happens if it can't be constructed. |
 | `AI_PROVIDER_TIMEOUT_SECONDS` | `ai_provider_timeout_seconds` | `8.0` | No | Non-numeric or non-positive values **degrade** to the default with a `logger.warning`. Never fails startup. |
 | `MAX_ALERT_BODY_BYTES` | `max_alert_body_bytes` | `262144` (256 KiB) | No | Non-numeric or non-positive values **fail fast**: `Settings()` raises `pydantic.ValidationError` at startup. |
+| `AI_LIVE_MAX_RETRIES` | `ai_live_max_retries` | `2` | No | Only used by the live Anthropic provider; bounds its built-in retry policy for transient failures (connection errors, timeouts, HTTP 429/5xx). Non-numeric or negative values **degrade** to the default with a `logger.warning`. See [adr/001-failure-handling.md](adr/001-failure-handling.md). |
 | `ANTHROPIC_API_KEY` | `anthropic_api_key` | `None` | No (conditionally required) | Only read/needed when `AI_PROVIDER` selects a non-`mock` provider. If unset in that case, the AI assistant degrades to `unavailable` (see below) - the application still starts and serves requests; deterministic triage is unaffected either way. |
 
-All four are read once at application-construction time
+All five are read once at application-construction time
 (`create_app()` -> `get_settings()`); there is no runtime reconfiguration.
 
 ### Why two different missing-value strategies?
@@ -56,11 +57,12 @@ All four are read once at application-construction time
 This phase made an explicit, intentional choice for each setting rather
 than applying one blanket policy:
 
-- **`AI_PROVIDER` / `AI_PROVIDER_TIMEOUT_SECONDS` degrade gracefully.**
-  Both only affect the advisory, non-authoritative AI investigation layer.
-  Deterministic triage (`app/triage/engine.py`) is computed independently and
-  is never affected by AI configuration, so failing the whole application
-  over a misconfigured AI setting would reduce availability for no safety
+- **`AI_PROVIDER` / `AI_PROVIDER_TIMEOUT_SECONDS` / `AI_LIVE_MAX_RETRIES`
+  degrade gracefully.** All three only affect the advisory,
+  non-authoritative AI investigation layer. Deterministic triage
+  (`app/triage/engine.py`) is computed independently and is never affected
+  by AI configuration, so failing the whole application over a
+  misconfigured AI setting would reduce availability for no safety
   benefit. A misconfiguration is still visible (a `logger.warning`), just
   not fatal.
 - **`MAX_ALERT_BODY_BYTES` fails fast.** This is a safety limit that bounds

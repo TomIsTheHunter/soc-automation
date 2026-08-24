@@ -22,6 +22,13 @@ Each setting has a documented, intentional behavior when missing or invalid
   above, an invalid value **fails fast** at startup (`pydantic.ValidationError`)
   rather than silently falling back - this is a safety limit, not an
   operational tuning knob, so a misconfiguration here should be loud.
+- `AI_LIVE_MAX_RETRIES`: safe default (2), only used by the live Anthropic
+  provider. Bounds the SDK's own built-in retry policy for transient
+  failures (connection errors, timeouts, HTTP 429/5xx); authentication,
+  authorization, and invalid-request errors are never retried by the SDK
+  regardless of this value. A negative or non-numeric value degrades to
+  the default with a warning (same graceful-degrade policy as the other
+  AI settings - see docs/adr/001-failure-handling.md).
 """
 
 import logging
@@ -34,6 +41,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_AI_PROVIDER = "mock"
 DEFAULT_AI_TIMEOUT_SECONDS = 8.0
 DEFAULT_MAX_ALERT_BODY_BYTES = 256 * 1024
+DEFAULT_AI_LIVE_MAX_RETRIES = 2
 
 
 class Settings(BaseSettings):
@@ -51,6 +59,9 @@ class Settings(BaseSettings):
     )
     max_alert_body_bytes: int = Field(
         default=DEFAULT_MAX_ALERT_BODY_BYTES, gt=0, alias="MAX_ALERT_BODY_BYTES"
+    )
+    ai_live_max_retries: int = Field(
+        default=DEFAULT_AI_LIVE_MAX_RETRIES, alias="AI_LIVE_MAX_RETRIES"
     )
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
 
@@ -83,6 +94,29 @@ class Settings(BaseSettings):
                 DEFAULT_AI_TIMEOUT_SECONDS,
             )
             return DEFAULT_AI_TIMEOUT_SECONDS
+        return parsed
+
+    @field_validator("ai_live_max_retries", mode="before")
+    @classmethod
+    def _validate_live_max_retries(cls, value: object) -> object:
+        if value is None or value == "":
+            return DEFAULT_AI_LIVE_MAX_RETRIES
+        try:
+            parsed = int(value)  # type: ignore[call-overload]
+        except (TypeError, ValueError):
+            logger.warning(
+                "AI_LIVE_MAX_RETRIES=%r is not a valid integer; using default %d",
+                value,
+                DEFAULT_AI_LIVE_MAX_RETRIES,
+            )
+            return DEFAULT_AI_LIVE_MAX_RETRIES
+        if parsed < 0:
+            logger.warning(
+                "AI_LIVE_MAX_RETRIES=%d must not be negative; using default %d",
+                parsed,
+                DEFAULT_AI_LIVE_MAX_RETRIES,
+            )
+            return DEFAULT_AI_LIVE_MAX_RETRIES
         return parsed
 
 

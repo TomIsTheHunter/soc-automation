@@ -96,11 +96,17 @@ added to this allowlist.
   `AIAssistedAnalysis.decision_authority` is a fixed `"DETERMINISTIC"`
   literal, and `conflicts_with_triage` / `analyst_review_required` make any
   disagreement visible rather than resolving it silently.
-- **Bounded timeout, no silent retries**: every provider call is wrapped in
-  `asyncio.wait_for` with a configurable timeout
+- **Bounded timeout, no unbounded retries**: every provider call is wrapped
+  in `asyncio.wait_for` with a configurable timeout
   (`AI_PROVIDER_TIMEOUT_SECONDS`, default 8s), enforced at the call site in
-  [app/services/workflow.py](../app/services/workflow.py). Neither the mock
-  nor the live provider perform automatic retries.
+  [app/services/workflow.py](../app/services/workflow.py). The mock
+  provider never retries (it has no failure mode to retry). The live
+  provider delegates to the Anthropic SDK's own bounded, backoff-based
+  retry policy for transient failures only (connection errors, timeouts,
+  HTTP 429/5xx), capped by `AI_LIVE_MAX_RETRIES` (default 2);
+  authentication, authorization, and invalid-request failures are never
+  retried. See [docs/adr/001-failure-handling.md](adr/001-failure-handling.md)
+  for the full retry/failure model.
 - **Safe fallback**: provider unavailability, timeout, unexpected
   exceptions, and validation failures all degrade to
   `ai_assisted_analysis.status = "unavailable"` or `"rejected"` - the

@@ -26,6 +26,27 @@ Post-release engineering hardening (see [docs/engineering-hardening.md](docs/eng
   `ErrorDetail`/`ErrorResponse` Pydantic models instead of untyped literal
   dicts, and `POST /api/v1/alerts` documents its `413`/`422` error shape in
   the OpenAPI schema.
+- Centralized application configuration into a typed `Settings`
+  (`pydantic-settings`) model (`app/config.py`), replacing scattered
+  `os.environ` reads; `ANTHROPIC_API_KEY` is now sourced exclusively
+  through `Settings` and never read directly by `app/investigation/live.py`.
+- The live Anthropic provider (`app/investigation/live.py`) now classifies
+  provider failures (authentication/permission, rate-limit, connection/
+  status, unexpected) into distinct log messages instead of one generic
+  catch-all, while still degrading to a single `InvestigationUnavailableError`
+  application-wide. Its bounded retry count is now explicit and
+  configurable via the new `AI_LIVE_MAX_RETRIES` setting (default 2)
+  instead of relying on an undocumented SDK default. See
+  [docs/adr/001-failure-handling.md](docs/adr/001-failure-handling.md).
+
+### Added
+
+- `MAX_ALERT_BODY_BYTES` and `AI_LIVE_MAX_RETRIES` settings, both
+  documented in [docs/configuration.md](docs/configuration.md).
+- First Architecture Decision Record:
+  [docs/adr/001-failure-handling.md](docs/adr/001-failure-handling.md),
+  documenting the failure model and retry strategy for external
+  dependencies.
 
 ## [0.2.0] - 2026-08-14
 

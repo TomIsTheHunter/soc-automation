@@ -53,7 +53,9 @@ def select_investigation_assistant(settings: Settings | None = None) -> Investig
         api_key = (
             settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
         )
-        return AnthropicInvestigationAssistant(api_key=api_key)
+        return AnthropicInvestigationAssistant(
+            api_key=api_key, max_retries=settings.ai_live_max_retries
+        )
     except Exception:
         logger.warning(
             "AI provider %r is unavailable; "
