@@ -28,6 +28,7 @@ from typing import Any
 from app.investigation.assistant import InvestigationAssistant, InvestigationUnavailableError
 from app.investigation.prompt import build_investigation_prompt
 from app.models import InvestigationContext
+from app.observability import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -79,26 +80,61 @@ class AnthropicInvestigationAssistant(InvestigationAssistant):
             raise
         except (self._anthropic.AuthenticationError, self._anthropic.PermissionDeniedError) as exc:
             # Never retried (by the SDK or by us): credentials/authorization problems
-            # will not resolve themselves on a subsequent identical request.
-            logger.warning("Live investigation provider auth/permission failure: %s", exc)
+            # will not resolve themselves on a subsequent identical request. The
+            # message stays generic - exception text from the SDK may carry
+            # request/response detail that should not be logged verbatim.
+            log_event(
+                logger,
+                logging.WARNING,
+                "Live investigation provider auth/permission failure",
+                event="provider_degraded",
+                provider=LIVE_PROVIDER_NAME,
+                result="unavailable",
+                error_type=type(exc).__name__,
+            )
             raise InvestigationUnavailableError(
                 f"live investigation provider auth/permission failure: {exc}"
             ) from exc
         except self._anthropic.RateLimitError as exc:
             # Already bounded-retried by the SDK (honoring Retry-After) before reaching here.
-            logger.warning("Live investigation provider rate-limited: %s", exc)
+            log_event(
+                logger,
+                logging.WARNING,
+                "Live investigation provider rate-limited",
+                event="provider_degraded",
+                provider=LIVE_PROVIDER_NAME,
+                result="unavailable",
+                error_type=type(exc).__name__,
+            )
             raise InvestigationUnavailableError(
                 f"live investigation provider rate-limited: {exc}"
             ) from exc
         except (self._anthropic.APIConnectionError, self._anthropic.APIStatusError) as exc:
             # Connection failures and 5xx/408/409 are also already bounded-retried by
             # the SDK; other 4xx status errors (e.g. invalid request) are not retried.
-            logger.warning("Live investigation provider request failed: %s", exc)
+            log_event(
+                logger,
+                logging.WARNING,
+                "Live investigation provider request failed",
+                event="provider_degraded",
+                provider=LIVE_PROVIDER_NAME,
+                result="unavailable",
+                error_type=type(exc).__name__,
+            )
             raise InvestigationUnavailableError(
                 f"live investigation provider request failed: {exc}"
             ) from exc
         except Exception as exc:  # noqa: BLE001 - any other SDK failure must degrade safely
-            logger.exception("Unexpected live investigation provider failure")
+            log_event(
+                logger,
+                logging.ERROR,
+                "Unexpected live investigation provider failure",
+                event="provider_degraded",
+                provider=LIVE_PROVIDER_NAME,
+                result="error",
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
             raise InvestigationUnavailableError(
                 f"live investigation provider failed: {exc}"
             ) from exc

@@ -38,6 +38,7 @@ This repository processes a **CrowdStrike-style synthetic alert**. It is not an 
 - Policy controls: vocabulary constraints, a keyword denylist, and an evidence-grounding check
 - Safe failure handling for enrichment and AI failures, always failing closed to analyst review
 - A server-rendered analyst investigation view reusing the exact same pipeline as the API
+- Structured JSON logging with end-to-end `alert_id` correlation, explicit degraded-mode signaling, and a `/health/ready` readiness check separate from liveness (see [docs/operations.md](docs/operations.md))
 - Automated testing (unit, API, frontend, and one full end-to-end integration test), enforced offline via `pytest-socket`
 - CI workflow for lint, type checks, tests, dependency vulnerability audit, a full-history secret scan, and a Docker build check &mdash; confirmed green on a live GitHub Actions run
 
@@ -89,7 +90,7 @@ AI-Assisted Analysis
 Analyst Review
 ```
 
-See [docs/architecture.md](docs/architecture.md) for components, trust boundaries, and failure behavior, and [docs/ai-security-design.md](docs/ai-security-design.md) for the full AI threat model.
+See [docs/architecture.md](docs/architecture.md) for components, trust boundaries, and failure behavior, [docs/ai-security-design.md](docs/ai-security-design.md) for the full AI threat model, and [docs/operations.md](docs/operations.md) for running the service, health/readiness behavior, structured logging, and troubleshooting.
 
 ## Security Design Principles
 
@@ -130,7 +131,8 @@ The app is available at `http://127.0.0.1:8000`:
 - `/` &mdash; demo scenario picker
 - `/demo/{scenario_name}` &mdash; the analyst investigation view for one scenario
 - `/docs` &mdash; interactive OpenAPI docs for `POST /api/v1/alerts`
-- `/health` &mdash; health check
+- `/health` &mdash; liveness check
+- `/health/ready` &mdash; readiness check (`healthy`/`degraded`; see [docs/operations.md](docs/operations.md))
 
 ### Tests
 

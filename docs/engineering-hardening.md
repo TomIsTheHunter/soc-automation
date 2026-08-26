@@ -26,6 +26,17 @@
   `InvestigationUnavailableError` at the application boundary. New ADR:
   [docs/adr/001-failure-handling.md](adr/001-failure-handling.md). See
   Findings Log entry below for full detail.
+- **Phase 8 — Structured Logging and Observability Foundations: COMPLETE**
+  (2026-08-25) — introduced JSON structured logging
+  (`app/observability.py`) with one consistent field set (`event`,
+  `alert_id`, `workflow_stage`, `provider`, `duration_ms`, `result`,
+  `review_required`, `error_type`) across the whole codebase; full alert
+  correlation via `alert_id` through ingestion → enrichment → triage → AI
+  → analyst review; explicit `provider_degraded` events for enrichment/AI
+  failures; new `GET /health/ready` readiness endpoint reporting
+  `healthy`/`degraded` (AI unavailability never fails readiness, per the
+  Phase 7 ADR); new `LOG_LEVEL` setting. No secrets found logged (no new
+  `secret_leaks.md` entries). See Findings Log entry below for full detail.
 
 Secret Handling Protocol: `secret_leaks.md` created at repo root and added to
 `.gitignore` (committed alone, commit `f33ab2b`). No secrets found in the
@@ -339,6 +350,113 @@ clean; full suite 95 passed (was 81 before this phase — 14 new: 11 in
 `tests/test_live_provider.py`, 3 in `tests/test_config.py`); `pip-audit`
 (scoped via `uv export --extra dev`, matching `make audit`) clean — no new
 runtime dependencies were added by this phase.
+
+### Phase 8 — Structured Logging and Observability Foundations (2026-08-25)
+
+**Audit first**: grepped the whole `app/` tree for `print(`, unstructured
+messages, and existing logging call sites before changing anything. Found
+exactly 4 existing loggers (`app.config`, `app.main`, `app.services.workflow`,
+`app.investigation.live`), all using plain `%s`-formatted messages with no
+common field naming and no correlation identifier - confirming the Phase 1
+observation ("no structured/correlated logging") was still accurate. No
+`print()` calls, no credentials, and no raw alert content were already being
+logged anywhere - the existing discipline was good, just unstructured.
+
+**Structured logging introduced**: new `app/observability.py` -
+`StructuredFormatter` (one JSON object per log line, stdlib `logging` only,
+no new dependency) plus `log_event(...)`, a helper enforcing one fixed set
+of field names (`event`, `alert_id`, `workflow_stage`, `provider`,
+`duration_ms`, `result`, `review_required`, `error_type`) everywhere in the
+codebase, so there is exactly one name for "the alert" (`alert_id`) rather
+than the `alert`/`alertId`/`id` drift the phase brief specifically warned
+about. `configure_logging()` installs it on the root logger from
+`create_app()`, controlled by a new `LOG_LEVEL` setting
+(`Settings.log_level`, default `INFO`, same graceful-degrade-with-warning
+pattern as the existing AI settings - an unrecognized value never fails
+startup).
+
+**Alert correlation**: `app/services/workflow.py: run_alert_workflow` now
+emits one structured INFO event per meaningful stage (`alert_received`,
+`alert_validated`, `enrichment_completed`, `triage_completed`,
+`ai_investigation_attempted`, `ai_investigation_completed`,
+`workflow_completed`), every one carrying the same `alert_id`
+(`source_alert_id`, or the raw `payload.alert_id` before normalization has
+run). Verified directly (both by test and manual walkthrough) that grepping
+logs for one `alert_id` reconstructs the entire lifecycle without relying on
+timestamp ordering.
+
+**Degraded operation made explicit**: enrichment and AI provider failures
+(unavailable, timeout, rate-limited, connection/status failure) now emit a
+consistent `event=provider_degraded` with `provider`/`result`/`error_type`,
+replacing the previous plain-text `logger.warning`/`logger.exception` calls
+in both `app/services/workflow.py` and `app/investigation/live.py`. AI
+output rejected by schema/policy/grounding validation is logged distinctly
+(`event=ai_investigation_rejected`) from provider unavailability - the two
+were previously easy to conflate by message text alone. A forced
+`analyst_review_required` event (`review_required=true`) makes that
+decision visible as its own line rather than only as a response field.
+
+**Sensitive-data hardening beyond the pre-existing baseline**:
+`app/investigation/live.py`'s three classified `logger.warning` calls
+previously interpolated the raw SDK exception (`%s`, exc) directly into the
+logged message - per the phase brief's specific warning about exception
+messages carrying provider/request detail, this was tightened: the log
+message is now a fixed string (still containing the same distinguishing
+substring - `auth/permission`/`rate-limited`/`request failed` - so existing
+tests keep passing) and only `error_type` (the exception's class name, not
+its string contents) is attached as a structured field. This is a genuine,
+though minor, hardening - not a finding severe enough for `secret_leaks.md`
+(no real secret was ever found logged; this closes a theoretical future
+leak path before it could carry one). No actual secret was found logged
+anywhere in this audit - nothing was added to `secret_leaks.md`, no P0
+filed.
+
+**Health/readiness**: `GET /health` (liveness) is unchanged - lightweight,
+no dependency checks, exact same `{"status": "ok"}` response the existing
+test suite already asserted on. New `GET /health/ready` reports `healthy`
+vs. `degraded` based on whether the configured AI investigation assistant
+is the explicit `UnavailableInvestigationAssistant` sentinel; always
+returns HTTP `200` in either state, per the ADR's own reasoning
+(deterministic triage - the actual security decision - has no external
+dependency and is never affected by AI availability). Deliberately does
+**not** log on every readiness poll (would be pure noise for a
+frequently-polled endpoint) - the returned JSON body already carries the
+current state, and a `provider_degraded` event is already emitted once at
+selection time (`select_investigation_assistant`) and again on every alert
+that actually hits the AI stage.
+
+**Tests added**: `tests/test_logging.py` (new, 9 tests) - structured
+formatter output is valid JSON with the expected fields; full alert
+correlation across all seven workflow events sharing one `alert_id`; the
+final `workflow_completed` event reflects the actual outcome; enrichment
+and AI provider degradation each produce a distinguishable
+`provider_degraded` event with the right `result`/`error_type`; AI
+unavailability forces `review_required=true`; both readiness states
+(`healthy`/`degraded`) and liveness's independence from AI availability;
+and a dedicated redaction test (obviously-fake `sk-fake-test-...` API key,
+per the Secret Handling Protocol) proving an auth failure whose exception
+message embeds the fake key never leaks it into any rendered log line.
+
+**Verification**: `ruff check`/`ruff format --check`/`mypy --strict` clean;
+full suite 104 passed (was 95 before this phase - 9 new in
+`tests/test_logging.py`); `pip-audit` (scoped via `uv export --extra dev`,
+matching `make audit`) clean - no new runtime dependencies were added by
+this phase (structured logging uses stdlib `logging` only). Manual
+operational walkthrough performed: ran a representative high-risk alert
+through `POST /api/v1/alerts` and confirmed the full ingestion -> ...
+-> completed lifecycle was reconstructable from logs via `alert_id` alone;
+separately simulated an AI-provider failure (`?scenario=ai_failure`) and
+confirmed the `provider_degraded`/`analyst_review_required` events, the
+still-correct deterministic `ESCALATE` decision, and `/health/ready`
+reporting `degraded` were all consistent with each other.
+
+**Remaining observability gaps (recorded, out of scope for this phase)**:
+no metrics/tracing (e.g. OpenTelemetry) exists - this is a small, stateless
+single-service app without a metrics backend to send them to, so adding
+this now would be speculative infrastructure with nothing to consume it;
+logs are still stdout-only (no shipping/aggregation configured), which is
+appropriate for local/demo use but would need a log-shipping story (e.g.
+fluentbit/Loki) before a real production deployment.
 
 ## Tooling Baseline
 

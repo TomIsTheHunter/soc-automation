@@ -16,6 +16,7 @@ from app.investigation.assistant import (
 )
 from app.investigation.mock import MockInvestigationAssistant
 from app.models import ErrorDetail, ErrorResponse
+from app.observability import configure_logging, log_event
 from app.web.routes import web_router
 
 logger = logging.getLogger(__name__)
@@ -56,12 +57,16 @@ def select_investigation_assistant(settings: Settings | None = None) -> Investig
         return AnthropicInvestigationAssistant(
             api_key=api_key, max_retries=settings.ai_live_max_retries
         )
-    except Exception:
-        logger.warning(
-            "AI provider %r is unavailable; "
-            "deterministic triage remains authoritative and no mock result "
-            "is substituted as if it were live",
-            provider_name,
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            f"AI provider {provider_name!r} is unavailable; deterministic triage remains "
+            "authoritative and no mock result is substituted as if it were live",
+            event="provider_degraded",
+            provider=provider_name,
+            result="unavailable",
+            error_type=type(exc).__name__,
         )
         return UnavailableInvestigationAssistant(provider_name)
 
@@ -78,11 +83,15 @@ class AlertBodySizeLimitMiddleware:
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         content_length = headers.get(b"content-length")
         if content_length is not None and int(content_length) > self.max_bytes:
-            logger.warning(
-                "Rejected oversized request body: path=%s content_length=%s max_bytes=%d",
-                scope.get("path"),
-                content_length.decode("latin-1"),
-                self.max_bytes,
+            log_event(
+                logger,
+                logging.WARNING,
+                f"Rejected oversized request body: path={scope.get('path')} "
+                f"content_length={content_length.decode('latin-1')} max_bytes={self.max_bytes}",
+                event="request_rejected",
+                workflow_stage="received",
+                result="rejected",
+                error_type="request_too_large",
             )
             response = JSONResponse(
                 status_code=413,
@@ -106,6 +115,7 @@ def create_app(
     settings: Settings | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    configure_logging(settings.log_level)
     application = FastAPI(
         title="SOC Automation Platform",
         description=(
@@ -145,7 +155,36 @@ def create_app(
 
     @application.get("/health", tags=["health"])
     def health() -> dict[str, str]:
+        """Liveness: is the process alive and able to respond at all?
+
+        Deliberately lightweight - no dependency checks. An optional
+        provider being unavailable must never make this endpoint fail; see
+        `/health/ready` for that distinction and docs/operations.md for the
+        full rationale.
+        """
         return {"status": "ok"}
+
+    @application.get("/health/ready", tags=["health"])
+    def readiness() -> JSONResponse:
+        """Readiness: is the service ready to do its intended work?
+
+        The deterministic triage pipeline has no external dependency and is
+        always reported available. The AI investigation assistant is
+        explicitly non-authoritative (see docs/adr/001-failure-handling.md)
+        - when it is unavailable the service is reported `degraded`, not
+        `unhealthy`, because the core security workflow is unaffected.
+        """
+        ai_unavailable = isinstance(
+            application.state.investigation_assistant, UnavailableInvestigationAssistant
+        )
+        body = {
+            "status": "degraded" if ai_unavailable else "healthy",
+            "checks": {
+                "triage": "available",
+                "ai_provider": "unavailable" if ai_unavailable else "available",
+            },
+        }
+        return JSONResponse(status_code=200, content=body)
 
     @application.exception_handler(RequestValidationError)
     async def validation_exception_handler(
@@ -153,11 +192,16 @@ def create_app(
     ) -> JSONResponse:
         # Log only field locations/types, never field values - the request body
         # may contain attacker-controlled or sensitive content.
-        logger.warning(
-            "Rejected invalid request: method=%s path=%s errors=%s",
-            request.method,
-            request.url.path,
-            [{"loc": error.get("loc"), "type": error.get("type")} for error in exc.errors()],
+        errors = [{"loc": error.get("loc"), "type": error.get("type")} for error in exc.errors()]
+        log_event(
+            logger,
+            logging.WARNING,
+            f"Rejected invalid request: method={request.method} "
+            f"path={request.url.path} errors={errors}",
+            event="request_rejected",
+            workflow_stage="received",
+            result="rejected",
+            error_type="validation_error",
         )
         return JSONResponse(
             status_code=422,
@@ -173,12 +217,15 @@ def create_app(
     @application.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         message = str(exc.detail) if isinstance(exc.detail, str) else "request failed"
-        logger.warning(
-            "Rejected request: method=%s path=%s status=%d detail=%s",
-            request.method,
-            request.url.path,
-            exc.status_code,
-            message,
+        log_event(
+            logger,
+            logging.WARNING,
+            f"Rejected request: method={request.method} path={request.url.path} "
+            f"status={exc.status_code} detail={message}",
+            event="request_rejected",
+            workflow_stage="received",
+            result="rejected",
+            error_type=f"http_{exc.status_code}",
         )
         return JSONResponse(
             status_code=exc.status_code,
@@ -189,7 +236,16 @@ def create_app(
 
     @application.exception_handler(Exception)
     async def unexpected_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
-        logging.getLogger(__name__).exception("Unhandled application error", exc_info=exc)
+        log_event(
+            logger,
+            logging.ERROR,
+            "Unhandled application error",
+            event="unhandled_exception",
+            workflow_stage="received",
+            result="error",
+            error_type=type(exc).__name__,
+            exc_info=exc,
+        )
         return JSONResponse(
             status_code=500,
             content=ErrorResponse(

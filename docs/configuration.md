@@ -48,6 +48,7 @@ considered "extra".
 | `MAX_ALERT_BODY_BYTES` | `max_alert_body_bytes` | `262144` (256 KiB) | No | Non-numeric or non-positive values **fail fast**: `Settings()` raises `pydantic.ValidationError` at startup. |
 | `AI_LIVE_MAX_RETRIES` | `ai_live_max_retries` | `2` | No | Only used by the live Anthropic provider; bounds its built-in retry policy for transient failures (connection errors, timeouts, HTTP 429/5xx). Non-numeric or negative values **degrade** to the default with a `logger.warning`. See [adr/001-failure-handling.md](adr/001-failure-handling.md). |
 | `ANTHROPIC_API_KEY` | `anthropic_api_key` | `None` | No (conditionally required) | Only read/needed when `AI_PROVIDER` selects a non-`mock` provider. If unset in that case, the AI assistant degrades to `unavailable` (see below) - the application still starts and serves requests; deterministic triage is unaffected either way. |
+| `LOG_LEVEL` | `log_level` | `"INFO"` | No | Controls structured JSON log verbosity (see [operations.md](operations.md)). An unrecognized value **degrades** to the default with a `logger.warning`. Never fails startup. |
 
 All five are read once at application-construction time
 (`create_app()` -> `get_settings()`); there is no runtime reconfiguration.
@@ -75,6 +76,8 @@ than applying one blanket policy:
   `AI_PROVIDER` explicitly selects a live provider, and its absence there is
   itself the documented degraded path (see next section) rather than a
   configuration error.
+- **`LOG_LEVEL` degrades gracefully**, matching the AI settings above - a
+  typo'd log level should never prevent the application from starting.
 
 ## AI provider selection (`app/main.py: select_investigation_assistant`)
 

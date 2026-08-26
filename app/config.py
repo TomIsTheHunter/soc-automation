@@ -29,6 +29,10 @@ Each setting has a documented, intentional behavior when missing or invalid
   regardless of this value. A negative or non-numeric value degrades to
   the default with a warning (same graceful-degrade policy as the other
   AI settings - see docs/adr/001-failure-handling.md).
+- `LOG_LEVEL`: safe default (`"INFO"`); an unrecognized value degrades to
+  the default with a warning (degraded, not fatal - never worth failing
+  application startup over). See docs/operations.md for the structured
+  logging this controls.
 """
 
 import logging
@@ -42,6 +46,8 @@ DEFAULT_AI_PROVIDER = "mock"
 DEFAULT_AI_TIMEOUT_SECONDS = 8.0
 DEFAULT_MAX_ALERT_BODY_BYTES = 256 * 1024
 DEFAULT_AI_LIVE_MAX_RETRIES = 2
+DEFAULT_LOG_LEVEL = "INFO"
+VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
 class Settings(BaseSettings):
@@ -64,6 +70,7 @@ class Settings(BaseSettings):
         default=DEFAULT_AI_LIVE_MAX_RETRIES, alias="AI_LIVE_MAX_RETRIES"
     )
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    log_level: str = Field(default=DEFAULT_LOG_LEVEL, alias="LOG_LEVEL")
 
     @field_validator("ai_provider", mode="before")
     @classmethod
@@ -118,6 +125,20 @@ class Settings(BaseSettings):
             )
             return DEFAULT_AI_LIVE_MAX_RETRIES
         return parsed
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _validate_log_level(cls, value: object) -> object:
+        if value is None or value == "":
+            return DEFAULT_LOG_LEVEL
+        if isinstance(value, str) and value.strip().upper() in VALID_LOG_LEVELS:
+            return value.strip().upper()
+        logger.warning(
+            "LOG_LEVEL=%r is not a recognized level; using default %r",
+            value,
+            DEFAULT_LOG_LEVEL,
+        )
+        return DEFAULT_LOG_LEVEL
 
 
 def get_settings() -> Settings:

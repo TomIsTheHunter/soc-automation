@@ -47,6 +47,18 @@ Post-release engineering hardening (see [docs/engineering-hardening.md](docs/eng
   [docs/adr/001-failure-handling.md](docs/adr/001-failure-handling.md),
   documenting the failure model and retry strategy for external
   dependencies.
+- Structured JSON logging (`app/observability.py`): every workflow
+  event, provider degradation, and rejected request is now a single JSON
+  log line with consistent fields (`event`, `alert_id`, `workflow_stage`,
+  `provider`, `duration_ms`, `result`, `review_required`, `error_type`),
+  making one alert's entire lifecycle traceable end to end by its
+  `alert_id`. New `LOG_LEVEL` setting controls verbosity (default `INFO`).
+- `GET /health/ready` readiness endpoint, reporting `healthy` vs.
+  `healthy-but-degraded` (`degraded`) based on AI provider availability,
+  separate from the existing lightweight `GET /health` liveness check.
+- `docs/operations.md`: running the service, health/readiness semantics,
+  the structured logging schema with representative (fake-data) examples,
+  common failure modes, degraded-mode behavior, and a troubleshooting flow.
 
 ## [0.2.0] - 2026-08-14
 
