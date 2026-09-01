@@ -8,11 +8,14 @@ application. It is kept accurate to the implementation in
 [app/integrations/](../app/integrations/) - if this file and the code
 disagree, the code is correct and this file has drifted.
 
-Monday's scope (this document) is the foundation plus **one** mock-backed
-enrichment provider. Retries, pagination, rate limiting, webhook ingestion,
-idempotency, and the vulnerability/case-management categories are
-explicitly deferred to later in Sprint 2 (see Issue #4) - the boundaries
-below are shaped so they can be added without a rewrite.
+Monday established the foundation plus **one** mock-backed enrichment
+provider. Tuesday (see
+[adr/002-provider-resilience.md](adr/002-provider-resilience.md)) added
+timeouts, bounded retry/backoff, and rate-limit (429/`Retry-After`)
+handling on top of that same foundation. Pagination, webhook ingestion,
+idempotency, and the vulnerability/case-management provider categories
+remain explicitly deferred to later in Sprint 2 (see Issue #4) - the
+boundaries below are shaped so they can be added without a rewrite.
 
 ## Why an integration layer exists
 
@@ -108,22 +111,29 @@ Each adapter (e.g. `ThreatIntelEnrichmentProvider`) is responsible for:
 `BaseIntegrationClient` centralizes everything a provider adapter would
 otherwise duplicate:
 
-- Base URL and per-request timeout (`httpx.Client`).
+- Base URL, separate connect/read timeouts (`httpx.Timeout`).
 - Auth header construction via a pluggable `AuthStrategy` (see below).
 - Standard headers (`Accept: application/json`).
+- Bounded retry with exponential backoff and `Retry-After` handling for
+  transient failures (429/502/503/504, timeouts, connection errors) - see
+  [adr/002-provider-resilience.md](adr/002-provider-resilience.md) for the
+  full policy and reasoning.
 - Request execution and classification of every failure mode - timeout,
   network error, HTTP status, invalid/unexpected JSON - into a specific
   `IntegrationError` subclass (see the error model below).
-- Safe logging of provider degradation via the existing
-  `app.observability.log_event` helper (same structured fields as the rest
-  of the application - `event="provider_degraded"`, `provider`, `error_type`
-  - never raw request/response bodies).
+- Structured logging of every retry and failure via the existing
+  `app.observability.log_event` helper (`event="provider_retry"` /
+  `"provider_degraded"` / `"provider_recovered"`, `provider`, `operation`,
+  `attempt`, `status_code`, `duration_ms`, `retry`, `error_type` - never
+  raw request/response bodies or credentials).
 
-It deliberately does **not** implement retries, pagination, rate limiting,
-or a generic request-building DSL - those are named as explicit, deferred
-areas of work (Issue #4), not silently skipped. The file is ~150 lines and
-has exactly one level of abstraction (one client class plus two small auth
-strategy classes), per the sprint's complexity guardrail.
+It deliberately does **not** implement pagination, cross-request
+concurrency limiting, or a generic request-building DSL - those remain
+named as explicit, deferred areas of work (Issue #4), not silently
+skipped. It has exactly one level of abstraction (one client class, one
+`RetryPolicy` dataclass, plus two small auth strategy classes) - resilience
+was added by extending this same class, not by introducing a second HTTP
+or retry framework.
 
 ## Authentication
 
@@ -180,14 +190,20 @@ uses a real `httpx.Client` connection to `base_url`).
 
 ## Error model (`app/integrations/errors.py`)
 
-| Exception | Condition | Adapter translation |
-|---|---|---|
-| `IntegrationAuthError` | HTTP 401/403 | `EnrichmentUnavailableError` |
-| `IntegrationNotFoundError` | HTTP 404 | `Reputation.UNKNOWN` result (not a failure) |
-| `IntegrationValidationError` | Invalid JSON, or JSON that fails `ThreatIntelVendorResponse` schema validation | `EnrichmentUnavailableError` |
-| `IntegrationServerError` | HTTP 5xx | `EnrichmentUnavailableError` |
-| `IntegrationTimeoutError` | Request timeout | `EnrichmentUnavailableError` |
-| `IntegrationUnexpectedError` | Any other non-2xx status or unclassified `httpx` error | `EnrichmentUnavailableError` |
+| Exception | Condition | Retried? | Adapter translation |
+|---|---|---|---|
+| `IntegrationAuthError` | HTTP 401/403 | No | `EnrichmentUnavailableError` |
+| `IntegrationNotFoundError` | HTTP 404 | No | `Reputation.UNKNOWN` result (not a failure) |
+| `IntegrationRateLimitedError` | HTTP 429, even after bounded retries | Yes, bounded, honors `Retry-After` | `EnrichmentUnavailableError` |
+| `IntegrationValidationError` | Invalid JSON, or JSON that fails `ThreatIntelVendorResponse` schema validation | No | `EnrichmentUnavailableError` |
+| `IntegrationServerError` | HTTP 5xx | Only 502/503/504; a bare 500 is not retried (see the ADR) | `EnrichmentUnavailableError` |
+| `IntegrationTimeoutError` | Request timeout or connection failure | Yes, bounded | `EnrichmentUnavailableError` |
+| `IntegrationUnexpectedError` | Any other non-2xx status or unclassified `httpx` error | No | `EnrichmentUnavailableError` |
+
+The full retry/backoff/rate-limit policy and the reasoning behind each
+"retried?" column above is documented in
+[adr/002-provider-resilience.md](adr/002-provider-resilience.md) - this
+table is a summary, not the source of truth.
 
 Every subclass carries only `provider` (a name) and `status_code` (an int)
 as structured attributes - never headers, query strings, or the response
@@ -220,9 +236,13 @@ code changed to support this new provider.
     tests for header-like or credential-like literals in log/exception
     strings - none found.
   - Every new test that triggers an auth failure
-    (`test_401_403_raise_auth_error`, `test_401_is_classified_and_raises_...`)
-    asserts the configured key/secret string does **not** appear anywhere
-    in the raised exception's `str()`.
+    (`test_401_403_raise_auth_error_without_retry`,
+    `test_401_is_classified_and_raises_enrichment_unavailable`) asserts the
+    configured key/secret string does **not** appear anywhere in the
+    raised exception's `str()`; retry-path tests
+    (`test_retry_and_failure_logs_never_leak_the_api_key`) additionally
+    assert it across every captured log record, including all structured
+    fields, not just the message string.
   - `THREAT_INTEL_API_KEY`'s default value is a clearly-labeled placeholder
     (`mock-threat-intel-api-key`) that only ever authenticates against the
     in-process mock transport above - it is not a value that needs to stay
@@ -302,6 +322,14 @@ silently resolved:
   matters. Adding a selector setting is a natural, low-risk follow-up once
   a second real provider exists to choose between.
 - Retries, pagination, rate limiting, webhook ingestion, and idempotency
-  are named in Issue #4 as explicit follow-up areas, not implemented here.
+  are named in Issue #4 as explicit follow-up areas. Timeouts, bounded
+  retry/backoff, and rate-limit (429) handling for the existing
+  enrichment provider were implemented in this phase - see
+  [adr/002-provider-resilience.md](adr/002-provider-resilience.md).
+  Pagination, webhook ingestion, and idempotency remain not implemented.
+- Cross-request concurrency control (e.g. bounding how many enrichment
+  calls run in parallel across a large burst of alerts) is a disclosed
+  limitation of the resilience work, not an oversight - see the ADR's
+  "Scale Implications" section.
 - Vulnerability/context and case-management provider categories are not
   built this phase.

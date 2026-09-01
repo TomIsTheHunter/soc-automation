@@ -21,6 +21,19 @@ All notable changes to this project are documented in this file.
   (`app/config.py`), following the existing `Settings` conventions.
 - `httpx` promoted from a dev-only dependency to a core dependency (it now
   backs the integration client, not just the test suite).
+- Provider resilience for the integration client foundation
+  (`app/integrations/base.py`): separate connect/read timeouts, bounded
+  retry with exponential backoff and jitter, and `Retry-After`-aware
+  rate-limit (429) handling, bounded so a malformed/adversarial value
+  can never cause an unbounded wait. New `IntegrationRateLimitedError`.
+  New `THREAT_INTEL_TIMEOUT_SECONDS` / `THREAT_INTEL_MAX_RETRIES`
+  settings, following the existing `Settings` conventions. Structured
+  logging extended with `operation`/`attempt`/`retry`/`status_code`
+  fields (`app/observability.py`). See
+  [docs/adr/002-provider-resilience.md](docs/adr/002-provider-resilience.md)
+  and Issue #4. No workflow or triage code changed - every
+  `IntegrationError` still translates to the existing
+  `EnrichmentUnavailableError` at the adapter boundary.
 
 ## [0.3.0] - 2026-08-26
 
