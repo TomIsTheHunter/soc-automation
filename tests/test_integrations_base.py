@@ -378,3 +378,57 @@ def test_retry_and_failure_logs_never_leak_the_api_key(
     assert getattr(retry_records[0], "status_code", None) == 503
     assert getattr(failure_records[0], "attempt", None) == 3
     assert getattr(failure_records[0], "retry", None) is False
+
+
+# --- Pagination --------------------------------------------------------------
+
+
+def test_get_paginated_follows_cursor_across_pages() -> None:
+    pages = [
+        {"items": [{"value": 1}], "next_cursor": "2"},
+        {"items": [{"value": 2}], "next_cursor": "3"},
+        {"items": [{"value": 3}], "next_cursor": None},
+    ]
+    seen_cursors: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cursor = request.url.params.get("cursor")
+        seen_cursors.append(cursor)
+        index = int(cursor) - 1 if cursor else 0
+        return httpx.Response(200, json=pages[index])
+
+    client = _client(httpx.MockTransport(handler))
+    items = client.get_paginated("/things")
+    assert items == [{"value": 1}, {"value": 2}, {"value": 3}]
+    assert seen_cursors == [None, "2", "3"]
+
+
+def test_get_paginated_stops_when_next_cursor_is_absent() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"items": [{"value": "only"}]})
+
+    client = _client(httpx.MockTransport(handler))
+    assert client.get_paginated("/things") == [{"value": "only"}]
+
+
+def test_get_paginated_is_bounded_by_max_pages() -> None:
+    calls: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        # A misbehaving/malicious provider that never stops paginating.
+        return httpx.Response(200, json={"items": [{"n": len(calls)}], "next_cursor": "loop"})
+
+    client = _client(httpx.MockTransport(handler))
+    items = client.get_paginated("/things", max_pages=3)
+    assert len(calls) == 3
+    assert len(items) == 3
+
+
+def test_get_paginated_raises_validation_error_for_missing_items_key() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"unexpected": "shape"})
+
+    client = _client(httpx.MockTransport(handler))
+    with pytest.raises(IntegrationValidationError):
+        client.get_paginated("/things")

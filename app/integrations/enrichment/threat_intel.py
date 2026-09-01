@@ -14,6 +14,12 @@ to exercise the FastAPI app without a real socket. The request/response
 code path (headers, status codes, JSON parsing, schema validation, retry
 behavior) is real; only the transport is swapped. See
 docs/integration-architecture.md and docs/adr/002-provider-resilience.md.
+
+`ThreatIntelClient.list_indicators()` additionally demonstrates the base
+client's cursor pagination (`BaseIntegrationClient.get_paginated`) against
+a synthetic multi-page `/indicators/list` endpoint - not wired into
+`ThreatIntelEnrichmentProvider`/the SOC workflow, since nothing there
+needs a bulk indicator listing today.
 """
 
 import logging
@@ -78,6 +84,26 @@ class ThreatIntelVendorResponse(BaseModel):
     tags: list[str] = []
 
 
+# Page size for the synthetic /indicators/list endpoint below - deliberately
+# small (1) so the fixed 2-record _VENDOR_RECORDS table still exercises
+# multi-page pagination in tests without needing more synthetic data.
+_LIST_PAGE_SIZE = 1
+
+
+def _handle_list_indicators(request: httpx.Request) -> httpx.Response:
+    """Serve one page of `/indicators/list`, cursor = the next start offset."""
+    records = list(_VENDOR_RECORDS.values())
+    cursor = request.url.params.get("cursor")
+    try:
+        start = int(cursor) if cursor else 0
+    except ValueError:
+        return httpx.Response(400, json={"error": "invalid cursor"})
+    page = records[start : start + _LIST_PAGE_SIZE]
+    next_start = start + _LIST_PAGE_SIZE
+    next_cursor = str(next_start) if next_start < len(records) else None
+    return httpx.Response(200, json={"items": page, "next_cursor": next_cursor})
+
+
 def mock_threat_intel_transport(request: httpx.Request) -> httpx.Response:
     """Simulate the external vendor's HTTP API for `httpx.MockTransport`.
 
@@ -86,6 +112,8 @@ def mock_threat_intel_transport(request: httpx.Request) -> httpx.Response:
     """
     if request.headers.get("x-api-key") != "mock-threat-intel-api-key":
         return httpx.Response(401, json={"error": "invalid or missing API key"})
+    if request.url.path.endswith("/indicators/list"):
+        return _handle_list_indicators(request)
     indicator = request.url.params.get("indicator", "")
     record = _VENDOR_RECORDS.get(indicator)
     if record is None:
@@ -124,6 +152,17 @@ class ThreatIntelClient(BaseIntegrationClient):
         )
         try:
             return ThreatIntelVendorResponse.model_validate(raw)
+        except ValidationError as exc:
+            raise IntegrationValidationError(
+                f"{PROVIDER_NAME} returned an unexpected response schema",
+                provider=PROVIDER_NAME,
+            ) from exc
+
+    def list_indicators(self) -> list[ThreatIntelVendorResponse]:
+        """Fetch every known indicator across all pages of `/indicators/list`."""
+        raw_items = self.get_paginated("/indicators/list", operation="list_indicators")
+        try:
+            return [ThreatIntelVendorResponse.model_validate(item) for item in raw_items]
         except ValidationError as exc:
             raise IntegrationValidationError(
                 f"{PROVIDER_NAME} returned an unexpected response schema",

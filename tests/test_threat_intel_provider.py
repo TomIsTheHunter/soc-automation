@@ -219,3 +219,17 @@ def test_provider_interchangeability_on_benign_alert() -> None:
 
     assert mock_triage.decision == threat_intel_triage.decision
     assert mock_triage.rules_triggered == threat_intel_triage.rules_triggered
+
+
+def test_list_indicators_follows_pagination_across_the_fixed_vendor_table() -> None:
+    """ThreatIntelClient.list_indicators() demonstrates get_paginated() end to end.
+
+    Not wired into ThreatIntelEnrichmentProvider/the SOC workflow - see the
+    module docstring.
+    """
+    client = ThreatIntelClient(
+        api_key=API_KEY, transport=httpx.MockTransport(mock_threat_intel_transport)
+    )
+    results = client.list_indicators()
+    assert {item.ioc for item in results} == {"198.51.100.10", "203.0.113.10"}
+    assert {item.verdict for item in results} == {"malicious", "benign"}

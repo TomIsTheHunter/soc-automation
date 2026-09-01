@@ -12,10 +12,14 @@ Monday established the foundation plus **one** mock-backed enrichment
 provider. Tuesday (see
 [adr/002-provider-resilience.md](adr/002-provider-resilience.md)) added
 timeouts, bounded retry/backoff, and rate-limit (429/`Retry-After`)
-handling on top of that same foundation. Pagination, webhook ingestion,
-idempotency, and the vulnerability/case-management provider categories
-remain explicitly deferred to later in Sprint 2 (see Issue #4) - the
-boundaries below are shaped so they can be added without a rewrite.
+handling on top of that same foundation. A follow-up pass added a runtime
+enrichment-provider selector (`ENRICHMENT_PROVIDER`, see
+[configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider))
+and bounded cursor pagination (`BaseIntegrationClient.get_paginated`).
+Webhook ingestion, idempotency, and the vulnerability/case-management
+provider categories remain explicitly deferred to later in Sprint 2 (see
+Issue #4) - the boundaries below are shaped so they can be added without a
+rewrite.
 
 ## Why an integration layer exists
 
@@ -126,13 +130,20 @@ otherwise duplicate:
   `"provider_degraded"` / `"provider_recovered"`, `provider`, `operation`,
   `attempt`, `status_code`, `duration_ms`, `retry`, `error_type` - never
   raw request/response bodies or credentials).
+- Bounded cursor pagination (`get_paginated()`): a loop over `get()` that
+  follows a `next_cursor` field across pages, capped at `max_pages` so a
+  broken or malicious provider returning a cursor loop can never cause an
+  unbounded number of requests - the same bounded philosophy as retries.
+  Demonstrated by `ThreatIntelClient.list_indicators()` against a
+  synthetic multi-page endpoint (not wired into the SOC workflow - nothing
+  there needs a bulk indicator listing today).
 
-It deliberately does **not** implement pagination, cross-request
-concurrency limiting, or a generic request-building DSL - those remain
-named as explicit, deferred areas of work (Issue #4), not silently
-skipped. It has exactly one level of abstraction (one client class, one
-`RetryPolicy` dataclass, plus two small auth strategy classes) - resilience
-was added by extending this same class, not by introducing a second HTTP
+It deliberately does **not** implement cross-request concurrency limiting
+or a generic request-building DSL - those remain named as explicit,
+deferred areas of work (Issue #4), not silently skipped. It has exactly
+one level of abstraction (one client class, one `RetryPolicy` dataclass,
+plus two small auth strategy classes) - resilience and pagination were
+both added by extending this same class, not by introducing a second HTTP
 or retry framework.
 
 ## Authentication
@@ -322,12 +333,14 @@ silently resolved:
   `ThreatIntelEnrichmentProvider`, degrading to `FailingEnrichmentProvider`
   (never a silently substituted mock) if construction fails. See
   [configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider).
-- Retries, pagination, rate limiting, webhook ingestion, and idempotency
-  are named in Issue #4 as explicit follow-up areas. Timeouts, bounded
-  retry/backoff, and rate-limit (429) handling for the existing
-  enrichment provider were implemented in this phase - see
+- Retries, rate limiting, webhook ingestion, and idempotency are named in
+  Issue #4 as explicit follow-up areas. Timeouts, bounded retry/backoff,
+  and rate-limit (429) handling for the existing enrichment provider were
+  implemented in this phase - see
   [adr/002-provider-resilience.md](adr/002-provider-resilience.md).
-  Pagination, webhook ingestion, and idempotency remain not implemented.
+  Bounded cursor pagination (`get_paginated()`) was also added, demonstrated
+  by `ThreatIntelClient.list_indicators()`. Webhook ingestion and
+  idempotency remain not implemented.
 - Cross-request concurrency control (e.g. bounding how many enrichment
   calls run in parallel across a large burst of alerts) is a disclosed
   limitation of the resilience work, not an oversight - see the ADR's

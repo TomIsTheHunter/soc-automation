@@ -42,6 +42,15 @@ All notable changes to this project are documented in this file.
   `FailingEnrichmentProvider` (never a silently substituted mock) if
   construction fails. See
   [docs/configuration.md](docs/configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider).
+- Bounded cursor pagination for the integration client foundation
+  (`BaseIntegrationClient.get_paginated`): follows a `next_cursor` field
+  across pages via the existing `get()` (so per-page auth/timeout/retry/
+  logging is unchanged), capped at `max_pages` so a broken or malicious
+  provider can never cause an unbounded number of requests. Demonstrated
+  by new `ThreatIntelClient.list_indicators()` against a synthetic
+  multi-page `/indicators/list` endpoint - not wired into
+  `ThreatIntelEnrichmentProvider`/the SOC workflow, since nothing there
+  needs a bulk indicator listing today.
 
 ## [0.3.0] - 2026-08-26
 

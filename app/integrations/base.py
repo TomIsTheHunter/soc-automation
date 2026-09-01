@@ -14,10 +14,12 @@ it does not restate the reasoning.
 
 Deliberately minimal: two small auth strategies, one retry policy
 dataclass, and one client class - no plugin registry, generic
-request-building DSL, or second retry framework. Pagination and
-provider-specific/concurrency-based rate limiting remain out of scope (see
-docs/integration-architecture.md) and should be added here only when a
-provider actually needs them.
+request-building DSL, or second retry framework. Cursor-based pagination
+is supported via `get_paginated()`, itself just a bounded loop over the
+existing `get()` (retries/timeouts/logging already apply per page);
+provider-specific/concurrency-based rate limiting remains out of scope
+(see docs/integration-architecture.md) and should be added here only when
+a provider actually needs it.
 """
 
 import logging
@@ -204,6 +206,43 @@ class BaseIntegrationClient:
                 self._sleep(delay)
                 continue
             return self._parse_response(response, operation_name, attempt, _elapsed_ms(started))
+
+    def get_paginated(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        operation: str | None = None,
+        items_key: str = "items",
+        cursor_param: str = "cursor",
+        next_cursor_key: str = "next_cursor",
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Follow a cursor-paginated GET endpoint and return all items across pages.
+
+        Each page is fetched via `get()`, so per-page auth/timeout/retry/
+        logging behavior is unchanged - this only adds the cursor-following
+        loop. Bounded by `max_pages` so a broken or malicious provider
+        returning a cursor loop can never cause an unbounded number of
+        requests, the same bounded philosophy as retries (see
+        docs/adr/002-provider-resilience.md).
+        """
+        collected: list[dict[str, Any]] = []
+        page_params = dict(params or {})
+        for _ in range(max_pages):
+            page = self.get(path, params=page_params, operation=operation)
+            items = page.get(items_key)
+            if not isinstance(items, list):
+                raise IntegrationValidationError(
+                    f"{self.provider_name} paginated response missing a {items_key!r} list",
+                    provider=self.provider_name,
+                )
+            collected.extend(items)
+            next_cursor = page.get(next_cursor_key)
+            if not next_cursor:
+                break
+            page_params = {**(params or {}), cursor_param: next_cursor}
+        return collected
 
     def _retry_after_exception(
         self, exc: Exception, attempt: int, operation: str, started: float
