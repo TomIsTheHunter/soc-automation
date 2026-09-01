@@ -43,6 +43,10 @@ Each setting has a documented, intentional behavior when missing or invalid
   `AI_LIVE_MAX_RETRIES`, applied to the threat-intel integration client's
   read timeout and bounded retry policy - see
   docs/adr/002-provider-resilience.md.
+- `ENRICHMENT_PROVIDER`: safe default (`"mock"`), same empty-value
+  graceful-degrade pattern as `AI_PROVIDER`. Any other value attempts the
+  mock-backed threat-intel integration; see
+  `app/main.py: select_enrichment_provider`.
 """
 
 import logging
@@ -64,6 +68,7 @@ DEFAULT_THREAT_INTEL_BASE_URL = "https://mock-threat-intel.example/v1"
 DEFAULT_THREAT_INTEL_API_KEY = "mock-threat-intel-api-key"
 DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS = 5.0
 DEFAULT_THREAT_INTEL_MAX_RETRIES = 2
+DEFAULT_ENRICHMENT_PROVIDER = "mock"
 
 
 class Settings(BaseSettings):
@@ -98,6 +103,9 @@ class Settings(BaseSettings):
     )
     threat_intel_max_retries: int = Field(
         default=DEFAULT_THREAT_INTEL_MAX_RETRIES, alias="THREAT_INTEL_MAX_RETRIES"
+    )
+    enrichment_provider: str = Field(
+        default=DEFAULT_ENRICHMENT_PROVIDER, alias="ENRICHMENT_PROVIDER"
     )
 
     @field_validator("ai_provider", mode="before")
@@ -213,6 +221,16 @@ class Settings(BaseSettings):
             )
             return DEFAULT_THREAT_INTEL_MAX_RETRIES
         return parsed
+
+    @field_validator("enrichment_provider", mode="before")
+    @classmethod
+    def _default_empty_enrichment_provider(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            logger.warning(
+                "ENRICHMENT_PROVIDER is empty; using default %r", DEFAULT_ENRICHMENT_PROVIDER
+            )
+            return DEFAULT_ENRICHMENT_PROVIDER
+        return value
 
 
 def get_settings() -> Settings:

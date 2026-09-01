@@ -22,6 +22,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "MAX_ALERT_BODY_BYTES",
         "AI_LIVE_MAX_RETRIES",
         "ANTHROPIC_API_KEY",
+        "ENRICHMENT_PROVIDER",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -166,3 +167,30 @@ def test_zero_live_max_retries_is_accepted(monkeypatch: pytest.MonkeyPatch) -> N
     _clear_env(monkeypatch)
     monkeypatch.setenv("AI_LIVE_MAX_RETRIES", "0")
     assert get_settings().ai_live_max_retries == 0
+
+
+# --------------------------------------------------------------------------
+# ENRICHMENT_PROVIDER: degrades to the default (graceful, not fatal)
+# --------------------------------------------------------------------------
+
+
+def test_enrichment_provider_defaults_to_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_env(monkeypatch)
+    assert get_settings().enrichment_provider == "mock"
+
+
+def test_explicit_enrichment_provider_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENRICHMENT_PROVIDER", "threat-intel")
+    assert get_settings().enrichment_provider == "threat-intel"
+
+
+def test_empty_enrichment_provider_falls_back_to_default_with_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENRICHMENT_PROVIDER", "   ")
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        settings = get_settings()
+    assert settings.enrichment_provider == "mock"
+    assert any("ENRICHMENT_PROVIDER is empty" in record.getMessage() for record in caplog.records)

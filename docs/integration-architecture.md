@@ -278,9 +278,11 @@ directly in a test is the only thing that differs.
 4. Add contract tests covering 200/401/404/500/invalid-JSON/invalid-schema
    using an `httpx.MockTransport` handler, plus one interchangeability
    test alongside the existing provider for that category.
-5. Wire the new provider into `app/main.py`'s provider-selection point only
-   when the runtime actually needs to choose between providers (not
-   required for this phase - see "What was deliberately not wired" below).
+5. Wire the new provider into `app/main.py`'s provider-selection point
+   (mirroring `select_enrichment_provider`/`ENRICHMENT_PROVIDER`, see
+   [configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider))
+   once the runtime actually needs to choose between providers for that
+   category.
 
 No SOC workflow code changes are required by these steps - that is the
 property this architecture exists to guarantee.
@@ -313,14 +315,13 @@ silently resolved:
 
 ## What was deliberately not wired (this phase)
 
-- `app/main.py`'s default enrichment provider remains
-  `MockEnrichmentProvider()` - `ThreatIntelEnrichmentProvider` was not made
-  the runtime default, and no `ENRICHMENT_PROVIDER` selector setting (mirroring
-  `AI_PROVIDER`) was added. Nothing in this phase's scope required changing
-  the running application's behavior; interchangeability is demonstrated at
-  the provider/workflow boundary (see above), which is the property that
-  matters. Adding a selector setting is a natural, low-risk follow-up once
-  a second real provider exists to choose between.
+- `app/main.py: select_enrichment_provider` (new, mirroring
+  `select_investigation_assistant`) is wired into `create_app()` via the
+  new `ENRICHMENT_PROVIDER` setting - `ENRICHMENT_PROVIDER=mock` (default)
+  selects `MockEnrichmentProvider`; any other value attempts
+  `ThreatIntelEnrichmentProvider`, degrading to `FailingEnrichmentProvider`
+  (never a silently substituted mock) if construction fails. See
+  [configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider).
 - Retries, pagination, rate limiting, webhook ingestion, and idempotency
   are named in Issue #4 as explicit follow-up areas. Timeouts, bounded
   retry/backoff, and rate-limit (429) handling for the existing

@@ -34,6 +34,14 @@ All notable changes to this project are documented in this file.
   and Issue #4. No workflow or triage code changed - every
   `IntegrationError` still translates to the existing
   `EnrichmentUnavailableError` at the adapter boundary.
+- Runtime enrichment provider selection: new `ENRICHMENT_PROVIDER` setting
+  and `app/main.py: select_enrichment_provider`, mirroring the existing
+  `AI_PROVIDER`/`select_investigation_assistant` pattern exactly.
+  `ENRICHMENT_PROVIDER=mock` (default) selects `MockEnrichmentProvider`;
+  any other value attempts `ThreatIntelEnrichmentProvider`, degrading to
+  `FailingEnrichmentProvider` (never a silently substituted mock) if
+  construction fails. See
+  [docs/configuration.md](docs/configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider).
 
 ## [0.3.0] - 2026-08-26
 

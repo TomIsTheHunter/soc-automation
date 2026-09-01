@@ -9,7 +9,15 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.routes import router
 from app.config import DEFAULT_MAX_ALERT_BODY_BYTES, Settings, get_settings
-from app.enrichment.providers import MockEnrichmentProvider
+from app.enrichment.providers import (
+    EnrichmentProvider,
+    FailingEnrichmentProvider,
+    MockEnrichmentProvider,
+)
+from app.integrations.enrichment.threat_intel import (
+    ThreatIntelClient,
+    ThreatIntelEnrichmentProvider,
+)
 from app.investigation.assistant import (
     InvestigationAssistant,
     InvestigationUnavailableError,
@@ -71,6 +79,41 @@ def select_investigation_assistant(settings: Settings | None = None) -> Investig
         return UnavailableInvestigationAssistant(provider_name)
 
 
+def select_enrichment_provider(settings: Settings | None = None) -> EnrichmentProvider:
+    """Select the configured enrichment provider without silently substituting the mock.
+
+    `mock` is the default offline provider. Any explicit non-`mock` value
+    attempts the mock-backed threat-intel integration; if it cannot
+    initialize, we keep an explicitly failing provider so the workflow can
+    mark enrichment unavailable (existing Rule B) instead of pretending a
+    mock result was real.
+    """
+    settings = settings or get_settings()
+    provider_name = settings.enrichment_provider
+    if provider_name == "mock":
+        return MockEnrichmentProvider()
+    try:
+        client = ThreatIntelClient(
+            api_key=settings.threat_intel_api_key.get_secret_value(),
+            base_url=settings.threat_intel_base_url,
+            read_timeout_seconds=settings.threat_intel_timeout_seconds,
+            max_retries=settings.threat_intel_max_retries,
+        )
+        return ThreatIntelEnrichmentProvider(client)
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            f"Enrichment provider {provider_name!r} is unavailable; enrichment will be "
+            "marked unavailable and no mock result is substituted as if it were real",
+            event="provider_degraded",
+            provider=provider_name,
+            result="unavailable",
+            error_type=type(exc).__name__,
+        )
+        return FailingEnrichmentProvider()
+
+
 class AlertBodySizeLimitMiddleware:
     def __init__(self, app: ASGIApp, max_bytes: int = DEFAULT_MAX_ALERT_BODY_BYTES) -> None:
         self.app = app
@@ -109,7 +152,7 @@ class AlertBodySizeLimitMiddleware:
 
 
 def create_app(
-    enrichment_provider: object | None = None,
+    enrichment_provider: EnrichmentProvider | None = None,
     investigation_assistant: InvestigationAssistant | None = None,
     ai_timeout_seconds: float | None = None,
     settings: Settings | None = None,
@@ -133,7 +176,9 @@ def create_app(
         ],
     )
     application.state.settings = settings
-    application.state.enrichment_provider = enrichment_provider or MockEnrichmentProvider()
+    application.state.enrichment_provider = enrichment_provider or select_enrichment_provider(
+        settings
+    )
     application.state.investigation_assistant = (
         investigation_assistant or select_investigation_assistant(settings)
     )

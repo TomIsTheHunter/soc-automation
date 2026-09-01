@@ -49,8 +49,13 @@ considered "extra".
 | `AI_LIVE_MAX_RETRIES` | `ai_live_max_retries` | `2` | No | Only used by the live Anthropic provider; bounds its built-in retry policy for transient failures (connection errors, timeouts, HTTP 429/5xx). Non-numeric or negative values **degrade** to the default with a `logger.warning`. See [adr/001-failure-handling.md](adr/001-failure-handling.md). |
 | `ANTHROPIC_API_KEY` | `anthropic_api_key` | `None` | No (conditionally required) | Only read/needed when `AI_PROVIDER` selects a non-`mock` provider. If unset in that case, the AI assistant degrades to `unavailable` (see below) - the application still starts and serves requests; deterministic triage is unaffected either way. |
 | `LOG_LEVEL` | `log_level` | `"INFO"` | No | Controls structured JSON log verbosity (see [operations.md](operations.md)). An unrecognized value **degrades** to the default with a `logger.warning`. Never fails startup. |
+| `THREAT_INTEL_BASE_URL` | `threat_intel_base_url` | `"https://mock-threat-intel.example/v1"` | No | Used by the mock-backed threat-intel enrichment integration (see [integration-architecture.md](integration-architecture.md)). No validation - only consulted when `ENRICHMENT_PROVIDER` selects a non-`mock` provider. |
+| `THREAT_INTEL_API_KEY` | `threat_intel_api_key` | `"mock-threat-intel-api-key"` | No | Safe, non-secret default - only ever authenticates against the in-process mocked HTTP transport, never a live vendor. |
+| `THREAT_INTEL_TIMEOUT_SECONDS` | `threat_intel_timeout_seconds` | `5.0` | No | Read timeout for the threat-intel client. Non-numeric or non-positive values **degrade** to the default with a `logger.warning`. See [adr/002-provider-resilience.md](adr/002-provider-resilience.md). |
+| `THREAT_INTEL_MAX_RETRIES` | `threat_intel_max_retries` | `2` | No | Bounds the threat-intel client's retry policy for transient failures (429/502/503/504, timeouts, connection errors). Non-numeric or negative values **degrade** to the default with a `logger.warning`. |
+| `ENRICHMENT_PROVIDER` | `enrichment_provider` | `"mock"` | No | Empty/whitespace-only value **degrades** to the default with a `logger.warning`. Any other non-empty value is used as-is - see "Enrichment provider selection" below for what happens if it can't be constructed. |
 
-All five are read once at application-construction time
+All settings are read once at application-construction time
 (`create_app()` -> `get_settings()`); there is no runtime reconfiguration.
 
 ### Why two different missing-value strategies?
@@ -78,6 +83,10 @@ than applying one blanket policy:
   configuration error.
 - **`LOG_LEVEL` degrades gracefully**, matching the AI settings above - a
   typo'd log level should never prevent the application from starting.
+- **`THREAT_INTEL_*` and `ENRICHMENT_PROVIDER` degrade gracefully**, for
+  the same reason as the AI settings: enrichment failure already has a
+  well-tested fail-closed path (Rule B routes to `ANALYST_REVIEW`), so a
+  misconfigured integration setting should be visible, not fatal.
 
 ## AI provider selection (`app/main.py: select_investigation_assistant`)
 
@@ -94,6 +103,22 @@ than applying one blanket policy:
   `analyst_review_required` is `true`, honestly reflecting that no AI
   investigation actually happened. This behavior is unchanged from before
   this phase; only the configuration plumbing was centralized.
+
+## Enrichment provider selection (`app/main.py: select_enrichment_provider`)
+
+- `ENRICHMENT_PROVIDER=mock` (default): always available, fully offline,
+  deterministic (`app/enrichment/providers.py: MockEnrichmentProvider`).
+  Requires no other configuration.
+- Any other value: the application attempts to construct
+  `ThreatIntelEnrichmentProvider`
+  (`app/integrations/enrichment/threat_intel.py`), using the
+  `THREAT_INTEL_*` settings above. If construction fails, the app
+  substitutes an explicitly-failing provider
+  (`FailingEnrichmentProvider`) rather than silently falling back to the
+  mock provider - the deterministic triage result is still returned, but
+  enrichment is marked unavailable and Rule B routes to `ANALYST_REVIEW`,
+  honestly reflecting that no real enrichment lookup happened. Mirrors
+  the AI provider selection pattern above exactly.
 
 ## Secrets handling
 
