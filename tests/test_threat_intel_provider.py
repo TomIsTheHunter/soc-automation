@@ -26,6 +26,7 @@ from app.services.indicators import extract_indicators
 from app.triage.engine import triage_alert
 from fixtures.alerts import BENIGN_ALERT, HIGH_RISK_ALERT
 
+API_KEY = "mock-threat-intel-api-key"
 MALICIOUS_INDICATOR = Indicator(
     type=IndicatorType.IP, value="198.51.100.10", source="destination_ip"
 )
@@ -33,8 +34,26 @@ BENIGN_INDICATOR = Indicator(type=IndicatorType.IP, value="203.0.113.10", source
 UNKNOWN_INDICATOR = Indicator(type=IndicatorType.IP, value="192.0.2.99", source="destination_ip")
 
 
-def _provider(transport: httpx.MockTransport) -> ThreatIntelEnrichmentProvider:
-    client = ThreatIntelClient(api_key="mock-threat-intel-api-key", transport=transport)
+class _RecordingSleep:
+    """Fake `sleep` that records delays instead of waiting.
+
+    See the identical helper in tests/test_integrations_base.py for why
+    this exists (verify retry/backoff without real wall-clock delay).
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[float] = []
+
+    def __call__(self, seconds: float) -> None:
+        self.calls.append(seconds)
+
+
+def _provider(
+    transport: httpx.MockTransport, *, sleep: _RecordingSleep | None = None
+) -> ThreatIntelEnrichmentProvider:
+    client = ThreatIntelClient(
+        api_key=API_KEY, transport=transport, sleep=sleep or _RecordingSleep()
+    )
     return ThreatIntelEnrichmentProvider(client)
 
 
@@ -99,6 +118,65 @@ def test_valid_json_invalid_schema_fails_cleanly() -> None:
     provider = _provider(httpx.MockTransport(handler))
     with pytest.raises(EnrichmentUnavailableError):
         provider.enrich(MALICIOUS_INDICATOR)
+
+
+def test_provider_recovers_after_one_transient_503() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(503, text="bad gateway")
+        return mock_threat_intel_transport(request)
+
+    sleep = _RecordingSleep()
+    provider = _provider(httpx.MockTransport(handler), sleep=sleep)
+    result = provider.enrich(MALICIOUS_INDICATOR)
+    assert result.reputation == Reputation.MALICIOUS
+    assert len(calls) == 2
+    assert len(sleep.calls) == 1
+
+
+def test_provider_exhausts_retries_on_persistent_503() -> None:
+    calls: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(503, text="bad gateway")
+
+    sleep = _RecordingSleep()
+    provider = _provider(httpx.MockTransport(handler), sleep=sleep)
+    with pytest.raises(EnrichmentUnavailableError) as excinfo:
+        provider.enrich(MALICIOUS_INDICATOR)
+    assert API_KEY not in str(excinfo.value)
+    assert len(calls) == 3
+    assert len(sleep.calls) == 2
+
+
+def test_provider_429_rate_limited_raises_enrichment_unavailable() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "0.1"}, json={"error": "rate limited"})
+
+    sleep = _RecordingSleep()
+    provider = _provider(httpx.MockTransport(handler), sleep=sleep)
+    with pytest.raises(EnrichmentUnavailableError) as excinfo:
+        provider.enrich(MALICIOUS_INDICATOR)
+    assert API_KEY not in str(excinfo.value)
+    assert sleep.calls == [0.1, 0.1]
+
+
+def test_provider_timeout_raises_enrichment_unavailable_with_meaningful_message() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("provider did not respond in time")
+
+    sleep = _RecordingSleep()
+    provider = _provider(httpx.MockTransport(handler), sleep=sleep)
+    with pytest.raises(EnrichmentUnavailableError) as excinfo:
+        provider.enrich(MALICIOUS_INDICATOR)
+    assert API_KEY not in str(excinfo.value)
+    # Meaningful, provider-attributable failure - not a generic message.
+    assert "mock-threat-intel" in str(excinfo.value)
+    assert len(sleep.calls) == 2
 
 
 def test_provider_interchangeability_with_deterministic_triage() -> None:
