@@ -3,24 +3,33 @@
 Demonstrates the full integration boundary end to end:
 
     SOC workflow -> ThreatIntelEnrichmentProvider -> ThreatIntelClient
-    -> BaseIntegrationClient (auth, timeout, error classification)
-    -> mocked HTTP transport (simulated vendor) -> ThreatIntelVendorResponse
-    (raw provider schema) -> EnrichmentResult (normalized internal model)
+    -> BaseIntegrationClient (auth, timeout, bounded retry/backoff, error
+    classification) -> mocked HTTP transport (simulated vendor)
+    -> ThreatIntelVendorResponse (raw provider schema)
+    -> EnrichmentResult (normalized internal model)
 
 No real network call is ever made: `httpx.MockTransport` stands in for the
 vendor the same way `tests/conftest.py` already uses `httpx.ASGITransport`
 to exercise the FastAPI app without a real socket. The request/response
-code path (headers, status codes, JSON parsing, schema validation) is
-real; only the transport is swapped. See docs/integration-architecture.md.
+code path (headers, status codes, JSON parsing, schema validation, retry
+behavior) is real; only the transport is swapped. See
+docs/integration-architecture.md and docs/adr/002-provider-resilience.md.
 """
 
 import logging
+import time
+from collections.abc import Callable
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.enrichment.providers import EnrichmentProvider, EnrichmentUnavailableError
-from app.integrations.base import ApiKeyAuth, BaseIntegrationClient
+from app.integrations.base import (
+    DEFAULT_READ_TIMEOUT_SECONDS,
+    ApiKeyAuth,
+    BaseIntegrationClient,
+    RetryPolicy,
+)
 from app.integrations.errors import (
     IntegrationError,
     IntegrationNotFoundError,
@@ -32,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "mock-threat-intel"
 DEFAULT_BASE_URL = "https://mock-threat-intel.example/v1"
+# Retries beyond the first attempt; see docs/adr/002-provider-resilience.md.
+DEFAULT_MAX_RETRIES = 2
 
 # Fixed synthetic vendor "backend" data, served only over the mocked HTTP
 # boundary below. Deliberately separate from app/enrichment/table.py, which
@@ -90,19 +101,27 @@ class ThreatIntelClient(BaseIntegrationClient):
         *,
         api_key: str,
         base_url: str = DEFAULT_BASE_URL,
+        read_timeout_seconds: float = DEFAULT_READ_TIMEOUT_SECONDS,
+        max_retries: int = DEFAULT_MAX_RETRIES,
         transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(
             provider_name=PROVIDER_NAME,
             base_url=base_url,
             auth=ApiKeyAuth(api_key),
+            read_timeout_seconds=read_timeout_seconds,
+            retry_policy=RetryPolicy(max_attempts=max_retries + 1),
             transport=transport
             if transport is not None
             else httpx.MockTransport(mock_threat_intel_transport),
+            sleep=sleep,
         )
 
     def lookup_indicator(self, indicator: str) -> ThreatIntelVendorResponse:
-        raw = self.get("/indicators/lookup", params={"indicator": indicator})
+        raw = self.get(
+            "/indicators/lookup", params={"indicator": indicator}, operation="lookup_indicator"
+        )
         try:
             return ThreatIntelVendorResponse.model_validate(raw)
         except ValidationError as exc:
