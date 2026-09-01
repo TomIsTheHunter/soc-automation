@@ -122,7 +122,7 @@ def create_app(
             "Stage 1 deterministic processing plus Stage 2 bounded AI-assisted "
             "investigation for a CrowdStrike-style synthetic alert."
         ),
-        version="0.2.0",
+        version="0.3.0",
         openapi_tags=[
             {
                 "name": "alerts",

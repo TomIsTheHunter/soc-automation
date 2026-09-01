@@ -37,6 +37,15 @@
   `healthy`/`degraded` (AI unavailability never fails readiness, per the
   Phase 7 ADR); new `LOG_LEVEL` setting. No secrets found logged (no new
   `secret_leaks.md` entries). See Findings Log entry below for full detail.
+- **Phase 9 — Release, Documentation and Handover: COMPLETE** (2026-08-26)
+  — README rewritten and validated command-by-command against a live
+  running instance (found and fixed one real doc defect: `make` is not
+  installed on this Windows dev machine, so every `make` target now has
+  a verified raw-command fallback); Findings Log closure confirmed (all
+  filed P0/P1/P2 resolved, nothing silently dropped); version bumped
+  `0.2.0` → `0.3.0` (`pyproject.toml`, `app/main.py`, `uv.lock`); new
+  [docs/retrospective.md](retrospective.md). See Findings Log entry below
+  for full detail.
 
 Secret Handling Protocol: `secret_leaks.md` created at repo root and added to
 `.gitignore` (committed alone, commit `f33ab2b`). No secrets found in the
@@ -212,6 +221,33 @@ real GitHub Actions run
 `quality`/`secret-scan`/`docker-build` all passed) after pushing to
 `master`. All three issues auto-closed via `Fixes #N` commit-message
 keywords.
+
+### Findings Log closure (Phase 9 — Release, reviewed 2026-08-26)
+
+Every P0/P1/P2 item ever filed in this log is **resolved**, not deferred:
+
+- F1 (P0) — resolved, issue [#1](https://github.com/TomIsTheHunter/soc-automation/issues/1), closed.
+- F2 (P1) — resolved, issue [#2](https://github.com/TomIsTheHunter/soc-automation/issues/2), closed.
+- F3 (P2) — resolved, issue [#3](https://github.com/TomIsTheHunter/soc-automation/issues/3), closed.
+
+No new P0/P1 findings were raised in Phases 6, 7, or 8 — each phase's
+dedicated audit (secrets, exception/retry handling, logging content) found
+the existing behavior already correct and recorded that explicitly rather
+than filing something to hit a quota. Nothing P0/P1 has been silently
+dropped between phases and this release.
+
+The following are **known, disclosed limitations**, not hidden findings —
+each is stated plainly in [README.md](../README.md) ("What Is Deliberately
+Mocked / Simulated" and "What Production Deployment Would Require") rather
+than filed as an issue, because they are deliberate scope boundaries for a
+portfolio project, not defects:
+
+- No persistent audit trail beyond one HTTP response's `processing_history`.
+- No authentication/authorization on any endpoint.
+- No metrics/tracing backend or log shipping/aggregation (Phase 8's
+  "Remaining observability gaps" note, above).
+- The live AI provider has never been exercised against a real API key
+  ([docs/assumptions.md](assumptions.md)).
 
 ### Phase 6 — Configuration, Secrets & Secure Boundaries (2026-08-21)
 
@@ -457,6 +493,79 @@ this now would be speculative infrastructure with nothing to consume it;
 logs are still stdout-only (no shipping/aggregation configured), which is
 appropriate for local/demo use but would need a log-shipping story (e.g.
 fluentbit/Loki) before a real production deployment.
+
+### Phase 9 — Release, Documentation and Handover (2026-08-26)
+
+**Findings Log reviewed in full before starting** (per this phase's own
+instruction): every P0/P1/P2 ever filed (F1/F2/F3) is resolved and closed
+(see the "Findings Log closure" note added above, next to the original
+findings, rather than duplicated here). No open P0/P1 exists to carry
+forward. The remaining disclosed limitations (no persistence, no auth, no
+metrics/tracing backend, live AI provider never exercised against a real
+key) are recorded there and in README's honest-limitations sections, not
+silently dropped.
+
+**README rewritten and validated against a live instance, not just
+re-read**: started the real app locally and exercised every documented
+endpoint (`/health`, `/health/ready`, `/`, `/docs`, `/demo/high_risk`) and
+the exact `POST /api/v1/alerts` example payload from the README, confirming
+the response matches what's documented (`ESCALATE`/`available`). This
+walkthrough found one genuine, previously-unnoticed documentation defect:
+**`make` is not installed on this project's own Windows development
+machine** - every `make <target>` instruction in the README had been
+silently unvalidated on the very machine used to develop and verify this
+project, because the equivalent raw commands (`ruff check .`, `mypy app
+tests`, `python -m pytest`, etc.) were what actually got run in practice.
+Fixed by adding a verified raw-command equivalent next to every `make`
+instruction, plus an explicit note about `make` availability on Windows.
+Docker build itself could not be locally re-verified this session (Docker
+Desktop's engine was not running locally) - relied on CI's existing
+`docker-build` job instead, which is required-green on every push to
+`master`.
+
+**README restructured, not just re-worded**, per this phase's required
+content: an explicit "Why Deterministic Triage + AI, Not AI Alone" section
+(reproducibility/inspectability/no-prompt-injection-surface on the
+decision itself, vs. AI's bounded advisory role); a "Failure Handling &
+Resilience" section cross-referencing the ADR and `docs/operations.md`
+instead of restating them; a "What Is Deliberately Mocked / Simulated"
+section (synthetic alerts, the fixed enrichment lookup table, the mock AI
+provider, the never-exercised-against-a-real-key live provider, no
+persistence, no auth); a "What Production Deployment Would Require"
+section (real provider integrations, secrets management, identity/access
+controls, persistence, monitoring/alerting, deployment infrastructure,
+HA, production-scale testing, security review, operational ownership);
+and a "Documentation Map" linking every doc in the repository by purpose,
+so a reader can navigate by *need* instead of guessing filenames.
+
+**Release prepared**: confirmed the actual latest tag via `git tag`
+(`v0.2.0` - the phase brief specifically warned not to assume) rather than
+guessing. Since `v0.2.0`, three feature-level, backward-compatible phases
+shipped (configuration centralization, failure/retry engineering, and
+structured logging/health-readiness) with no breaking response-shape
+changes - a minor version bump to **`0.3.0`** was used, applied
+consistently to `pyproject.toml`, `app/main.py`'s FastAPI `version=`, and
+regenerated in `uv.lock` (`uv lock`). `CHANGELOG.md`'s `[Unreleased]`
+section was promoted to `[0.3.0] - 2026-08-26`, regrouped into **Added**/
+**Improved** per this phase's requested structure (rather than the
+previous Fixed/Changed/Added split), and a new empty `[Unreleased]` section
+was opened above it for future work.
+
+**Retrospective written**: new [docs/retrospective.md](retrospective.md)
+with the four required sections (What improved / What remains weak / What
+I learned / What would change for real customer alerts), written from
+concrete evidence gathered across all nine phases (e.g. the Rule C
+vacuous-truth bug, the exception-message leak-path hardening, the `make`
+availability gap found in this phase) rather than generic engineering
+platitudes.
+
+**Verification**: `ruff check`/`ruff format --check`/`mypy --strict`/
+`python -m pytest -q` all clean (104 tests, unchanged by this phase - no
+application code changed, only version metadata and documentation);
+`pip-audit` (scoped via `uv export --extra dev`) clean. No new runtime
+dependencies. Commit/push/tag confirmations handled per the phase's
+Confirmation Gates - see the chat transcript for the exact sequence and
+timestamps.
 
 ## Tooling Baseline
 
