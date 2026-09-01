@@ -4,9 +4,64 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-Post-release engineering hardening (see [docs/engineering-hardening.md](docs/engineering-hardening.md)).
+### Added
 
-### Fixed
+- Sprint 2 (Enterprise Security Integrations) foundation: reusable
+  integration client foundation (`app/integrations/base.py`) with
+  API-key and bearer-token authentication, a dedicated `IntegrationError`
+  classification hierarchy (`app/integrations/errors.py`), and a
+  mock-backed `ThreatIntelEnrichmentProvider`
+  (`app/integrations/enrichment/threat_intel.py`) implementing the
+  existing `EnrichmentProvider` interface. Adapts a provider-specific raw
+  response schema into the existing `EnrichmentResult` model - no new
+  normalized model was introduced. See
+  [docs/integration-architecture.md](docs/integration-architecture.md)
+  and Issue #4.
+- New `THREAT_INTEL_BASE_URL` / `THREAT_INTEL_API_KEY` settings
+  (`app/config.py`), following the existing `Settings` conventions.
+- `httpx` promoted from a dev-only dependency to a core dependency (it now
+  backs the integration client, not just the test suite).
+
+## [0.3.0] - 2026-08-26
+
+Engineering hardening release (see [docs/engineering-hardening.md](docs/engineering-hardening.md)
+for the full phase-by-phase audit trail, and [docs/retrospective.md](docs/retrospective.md)
+for an honest retrospective on this work).
+
+### Added
+
+- Centralized, typed application configuration (`app/config.py`, via
+  `pydantic-settings`) replacing scattered `os.environ` reads, with a
+  documented missing/invalid-value policy per setting (fail-fast for
+  `MAX_ALERT_BODY_BYTES`, graceful-degrade-with-warning for everything
+  else). New settings: `MAX_ALERT_BODY_BYTES`, `AI_LIVE_MAX_RETRIES`,
+  `LOG_LEVEL`. See [docs/configuration.md](docs/configuration.md).
+- First Architecture Decision Record:
+  [docs/adr/001-failure-handling.md](docs/adr/001-failure-handling.md),
+  documenting the failure model and retry strategy for every external/
+  fallible dependency.
+- Explicit, bounded retry configuration (`AI_LIVE_MAX_RETRIES`) for the
+  live AI provider, delegating backoff to the Anthropic SDK's own tested
+  retry policy instead of re-implementing it.
+- Structured JSON logging (`app/observability.py`): every workflow event,
+  provider degradation, and rejected request is now a single JSON log
+  line with consistent fields (`event`, `alert_id`, `workflow_stage`,
+  `provider`, `duration_ms`, `result`, `review_required`, `error_type`),
+  making one alert's entire lifecycle traceable end to end by its
+  `alert_id`.
+- `GET /health/ready` readiness endpoint, reporting `healthy` vs.
+  `healthy-but-degraded` (`degraded`) based on AI provider availability,
+  separate from the existing lightweight `GET /health` liveness check.
+- `docs/operations.md`: running the service, health/readiness semantics,
+  the structured logging schema with representative (fake-data) examples,
+  common failure modes, degraded-mode behavior, and a troubleshooting flow.
+- `docs/retrospective.md`: an honest engineering retrospective on this
+  hardening/release work.
+- 53 new automated tests since `v0.2.0` (51 &rarr; 104): full malformed-
+  input boundary matrix, configuration edge cases, live-provider failure
+  classification, structured-logging/correlation/redaction, and more.
+
+### Improved
 
 - Deterministic triage Rule C no longer treats a zero-indicator alert (no
   extractable IP/hash) as benign evidence; it now falls through to the
@@ -17,48 +72,29 @@ Post-release engineering hardening (see [docs/engineering-hardening.md](docs/eng
 - `AI_PROVIDER_TIMEOUT_SECONDS` now rejects non-positive values at startup,
   falling back to the documented default with a warning instead of causing
   the AI assistant to silently and permanently time out.
-
-### Changed
-
-- CI now also builds the Docker image (`docker-build` job) so a broken
-  `Dockerfile` can't go unnoticed.
+- The live Anthropic provider (`app/investigation/live.py`) now classifies
+  provider failures (authentication/permission, rate-limit, connection/
+  status, unexpected) into distinct, structured log events instead of one
+  generic catch-all, while still degrading to a single
+  `InvestigationUnavailableError` application-wide; provider exception text
+  is no longer interpolated into log messages, only the exception's class
+  name is (`error_type`), closing a theoretical sensitive-data leak path.
+  See [docs/adr/001-failure-handling.md](docs/adr/001-failure-handling.md).
+- `ANTHROPIC_API_KEY` is now sourced exclusively through the typed
+  `Settings` model and never read directly by
+  `app/investigation/live.py`.
 - Error responses (`app/main.py`) are now built from the shared
   `ErrorDetail`/`ErrorResponse` Pydantic models instead of untyped literal
   dicts, and `POST /api/v1/alerts` documents its `413`/`422` error shape in
   the OpenAPI schema.
-- Centralized application configuration into a typed `Settings`
-  (`pydantic-settings`) model (`app/config.py`), replacing scattered
-  `os.environ` reads; `ANTHROPIC_API_KEY` is now sourced exclusively
-  through `Settings` and never read directly by `app/investigation/live.py`.
-- The live Anthropic provider (`app/investigation/live.py`) now classifies
-  provider failures (authentication/permission, rate-limit, connection/
-  status, unexpected) into distinct log messages instead of one generic
-  catch-all, while still degrading to a single `InvestigationUnavailableError`
-  application-wide. Its bounded retry count is now explicit and
-  configurable via the new `AI_LIVE_MAX_RETRIES` setting (default 2)
-  instead of relying on an undocumented SDK default. See
-  [docs/adr/001-failure-handling.md](docs/adr/001-failure-handling.md).
-
-### Added
-
-- `MAX_ALERT_BODY_BYTES` and `AI_LIVE_MAX_RETRIES` settings, both
-  documented in [docs/configuration.md](docs/configuration.md).
-- First Architecture Decision Record:
-  [docs/adr/001-failure-handling.md](docs/adr/001-failure-handling.md),
-  documenting the failure model and retry strategy for external
-  dependencies.
-- Structured JSON logging (`app/observability.py`): every workflow
-  event, provider degradation, and rejected request is now a single JSON
-  log line with consistent fields (`event`, `alert_id`, `workflow_stage`,
-  `provider`, `duration_ms`, `result`, `review_required`, `error_type`),
-  making one alert's entire lifecycle traceable end to end by its
-  `alert_id`. New `LOG_LEVEL` setting controls verbosity (default `INFO`).
-- `GET /health/ready` readiness endpoint, reporting `healthy` vs.
-  `healthy-but-degraded` (`degraded`) based on AI provider availability,
-  separate from the existing lightweight `GET /health` liveness check.
-- `docs/operations.md`: running the service, health/readiness semantics,
-  the structured logging schema with representative (fake-data) examples,
-  common failure modes, degraded-mode behavior, and a troubleshooting flow.
+- Input-boundary and AI-output-boundary test coverage substantially
+  extended (malformed/missing/oversized fields, invalid timestamps,
+  unexpected nested data).
+- CI now also builds the Docker image (`docker-build` job) so a broken
+  `Dockerfile` can't go unnoticed.
+- README rewritten: explicit "why deterministic + AI" and failure-handling
+  sections, an honest "what is mocked" / "what production would require"
+  split, and a documentation map linking every doc in the repository.
 
 ## [0.2.0] - 2026-08-14
 
