@@ -1,6 +1,6 @@
 [project]
 name = "soc-automation"
-version = "0.2.0"
+version = "0.3.0"
 description = "Stage 1 deterministic SOC core plus Stage 2 bounded AI-assisted investigation"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,6 +8,7 @@ license = "MIT"
 authors = [{ name = "SOC Automation Project" }]
 dependencies = [
     "fastapi>=0.115,<1.0",
+    "httpx>=0.27,<1.0",
     "jinja2>=3.1,<4.0",
     "pydantic>=2.9,<3.0",
     "pydantic-settings>=2.15,<3.0",
@@ -16,7 +17,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "httpx>=0.27,<1.0",
     "mypy>=1.13,<2.0",
     "pip-audit>=2.7,<3.0",
     "pytest>=9.0.3,<10.0",

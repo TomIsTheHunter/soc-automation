@@ -33,6 +33,11 @@ Each setting has a documented, intentional behavior when missing or invalid
   the default with a warning (degraded, not fatal - never worth failing
   application startup over). See docs/operations.md for the structured
   logging this controls.
+- `THREAT_INTEL_BASE_URL` / `THREAT_INTEL_API_KEY`: configuration for the
+  mock-backed threat-intelligence enrichment integration
+  (`app/integrations/enrichment/threat_intel.py`). Both have safe,
+  non-secret defaults since the provider talks to a mocked HTTP transport,
+  not a real vendor - see docs/integration-architecture.md.
 """
 
 import logging
@@ -48,6 +53,10 @@ DEFAULT_MAX_ALERT_BODY_BYTES = 256 * 1024
 DEFAULT_AI_LIVE_MAX_RETRIES = 2
 DEFAULT_LOG_LEVEL = "INFO"
 VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+DEFAULT_THREAT_INTEL_BASE_URL = "https://mock-threat-intel.example/v1"
+# Not a real secret: this placeholder only ever authenticates against the
+# in-process mocked HTTP transport in threat_intel.py, never a live vendor.
+DEFAULT_THREAT_INTEL_API_KEY = "mock-threat-intel-api-key"
 
 
 class Settings(BaseSettings):
@@ -71,6 +80,12 @@ class Settings(BaseSettings):
     )
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     log_level: str = Field(default=DEFAULT_LOG_LEVEL, alias="LOG_LEVEL")
+    threat_intel_base_url: str = Field(
+        default=DEFAULT_THREAT_INTEL_BASE_URL, alias="THREAT_INTEL_BASE_URL"
+    )
+    threat_intel_api_key: SecretStr = Field(
+        default=SecretStr(DEFAULT_THREAT_INTEL_API_KEY), alias="THREAT_INTEL_API_KEY"
+    )
 
     @field_validator("ai_provider", mode="before")
     @classmethod
