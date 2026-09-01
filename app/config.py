@@ -38,6 +38,11 @@ Each setting has a documented, intentional behavior when missing or invalid
   (`app/integrations/enrichment/threat_intel.py`). Both have safe,
   non-secret defaults since the provider talks to a mocked HTTP transport,
   not a real vendor - see docs/integration-architecture.md.
+- `THREAT_INTEL_TIMEOUT_SECONDS` / `THREAT_INTEL_MAX_RETRIES`: the same
+  timeout/graceful-degrade pattern as `AI_PROVIDER_TIMEOUT_SECONDS`/
+  `AI_LIVE_MAX_RETRIES`, applied to the threat-intel integration client's
+  read timeout and bounded retry policy - see
+  docs/adr/002-provider-resilience.md.
 """
 
 import logging
@@ -57,6 +62,8 @@ DEFAULT_THREAT_INTEL_BASE_URL = "https://mock-threat-intel.example/v1"
 # Not a real secret: this placeholder only ever authenticates against the
 # in-process mocked HTTP transport in threat_intel.py, never a live vendor.
 DEFAULT_THREAT_INTEL_API_KEY = "mock-threat-intel-api-key"
+DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS = 5.0
+DEFAULT_THREAT_INTEL_MAX_RETRIES = 2
 
 
 class Settings(BaseSettings):
@@ -85,6 +92,12 @@ class Settings(BaseSettings):
     )
     threat_intel_api_key: SecretStr = Field(
         default=SecretStr(DEFAULT_THREAT_INTEL_API_KEY), alias="THREAT_INTEL_API_KEY"
+    )
+    threat_intel_timeout_seconds: float = Field(
+        default=DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS, alias="THREAT_INTEL_TIMEOUT_SECONDS"
+    )
+    threat_intel_max_retries: int = Field(
+        default=DEFAULT_THREAT_INTEL_MAX_RETRIES, alias="THREAT_INTEL_MAX_RETRIES"
     )
 
     @field_validator("ai_provider", mode="before")
@@ -154,6 +167,52 @@ class Settings(BaseSettings):
             DEFAULT_LOG_LEVEL,
         )
         return DEFAULT_LOG_LEVEL
+
+    @field_validator("threat_intel_timeout_seconds", mode="before")
+    @classmethod
+    def _validate_threat_intel_timeout(cls, value: object) -> object:
+        if value is None or value == "":
+            return DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS
+        try:
+            parsed = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            logger.warning(
+                "THREAT_INTEL_TIMEOUT_SECONDS=%r is not a valid number; using default %.1fs",
+                value,
+                DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS,
+            )
+            return DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS
+        if parsed <= 0:
+            logger.warning(
+                "THREAT_INTEL_TIMEOUT_SECONDS=%s must be positive; using default %.1fs",
+                parsed,
+                DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS,
+            )
+            return DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS
+        return parsed
+
+    @field_validator("threat_intel_max_retries", mode="before")
+    @classmethod
+    def _validate_threat_intel_max_retries(cls, value: object) -> object:
+        if value is None or value == "":
+            return DEFAULT_THREAT_INTEL_MAX_RETRIES
+        try:
+            parsed = int(value)  # type: ignore[call-overload]
+        except (TypeError, ValueError):
+            logger.warning(
+                "THREAT_INTEL_MAX_RETRIES=%r is not a valid integer; using default %d",
+                value,
+                DEFAULT_THREAT_INTEL_MAX_RETRIES,
+            )
+            return DEFAULT_THREAT_INTEL_MAX_RETRIES
+        if parsed < 0:
+            logger.warning(
+                "THREAT_INTEL_MAX_RETRIES=%d must not be negative; using default %d",
+                parsed,
+                DEFAULT_THREAT_INTEL_MAX_RETRIES,
+            )
+            return DEFAULT_THREAT_INTEL_MAX_RETRIES
+        return parsed
 
 
 def get_settings() -> Settings:

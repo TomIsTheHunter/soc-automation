@@ -25,6 +25,10 @@ class IntegrationNotFoundError(IntegrationError):
     """The requested resource does not exist at the provider (404)."""
 
 
+class IntegrationRateLimitedError(IntegrationError):
+    """The provider rejected the request due to rate limiting (429), even after bounded retries."""
+
+
 class IntegrationValidationError(IntegrationError):
     """The provider's response body was not valid JSON or did not match its schema."""
 
