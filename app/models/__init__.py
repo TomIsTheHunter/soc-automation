@@ -18,6 +18,7 @@ from app.models.investigation import (
     ProcessingResponse,
     RecommendedAction,
 )
+from app.models.vulnerability import AssetCriticality, VulnerabilityContext
 from app.models.workflow import (
     Confidence,
     EnrichmentResult,
@@ -37,6 +38,7 @@ __all__ = [
     "AIConfidence",
     "AIRiskAssessment",
     "AIStatus",
+    "AssetCriticality",
     "Confidence",
     "CrowdStrikeStyleAlert",
     "DeterministicTriageContext",
@@ -57,4 +59,5 @@ __all__ = [
     "Severity",
     "TriageDecision",
     "TriageResult",
+    "VulnerabilityContext",
 ]
