@@ -66,6 +66,23 @@ All notable changes to this project are documented in this file.
   `app/services/workflow.py` or `create_app()`; see
   [docs/integration-architecture.md](docs/integration-architecture.md)'s
   "What was deliberately not wired".
+- Case-management provider category foundation with idempotent writes:
+  new `BaseIntegrationClient.post()`, sharing the same retry/timeout/
+  classification loop as `get()` (extracted into `_send_with_retries()`),
+  plus a stable `Idempotency-Key` header generated once per call and
+  reused across that call's retries - so a retried POST after a
+  transient failure can never create a duplicate case. New
+  `app.case_management.providers.CaseManagementProvider` interface
+  (mirroring `EnrichmentProvider`), `MockCaseManagementProvider`
+  (in-memory, idempotent per alert ID by default), and
+  `IncidentDeskCaseManagementProvider` (mock-backed HTTP integration,
+  `app/integrations/case_management/incident_desk.py`, with an isolated
+  per-client idempotency-key store via a factory function, never shared
+  module-level state). New minimal `app.models.case.CaseResult` model
+  (`case_id`, `status`, `source`). See
+  [docs/adr/003-idempotent-writes.md](docs/adr/003-idempotent-writes.md).
+  Foundation only - not wired into `app/services/workflow.py` or
+  `create_app()`.
 
 ## [0.3.0] - 2026-08-26
 

@@ -12,15 +12,15 @@ Monday established the foundation plus **one** mock-backed enrichment
 provider. Tuesday (see
 [adr/002-provider-resilience.md](adr/002-provider-resilience.md)) added
 timeouts, bounded retry/backoff, and rate-limit (429/`Retry-After`)
-handling on top of that same foundation. A follow-up pass added a runtime
+handling on top of that same foundation. Follow-up passes added a runtime
 enrichment-provider selector (`ENRICHMENT_PROVIDER`, see
 [configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider)),
-bounded cursor pagination (`BaseIntegrationClient.get_paginated`), and a
-second provider category foundation (vulnerability/asset context, see
-below - not yet wired into the SOC workflow). Case-management, webhook
-ingestion, and idempotency remain explicitly deferred to later in Sprint 2
-(see Issue #4) - the boundaries below are shaped so they can be added
-without a rewrite.
+bounded cursor pagination (`BaseIntegrationClient.get_paginated`), the
+vulnerability/asset-context provider category, and the case-management
+provider category with idempotent writes (see
+[adr/003-idempotent-writes.md](adr/003-idempotent-writes.md)). Webhook
+ingestion remains explicitly deferred to later in Sprint 2 (see Issue #4)
+- the boundaries below are shaped so it can be added without a rewrite.
 
 ## Why an integration layer exists
 
@@ -49,9 +49,9 @@ SOC Automation Platform
     /       |       \
 Enrichment Vulnerability Case Management
     |          |          |
- Provider A  Provider A  (Sprint 2,
- Provider B  (this doc)   not yet
- (this doc)               built)
+ Provider A  Provider A  Provider A
+ Provider B  (this doc)  (this doc)
+ (this doc)
 ```
 
 - **Enrichment provider** - enrich security indicators (IPs, domains, URLs,
@@ -66,8 +66,15 @@ Enrichment Vulnerability Case Management
   integration). Foundation only - not yet consumed by `app/services/workflow.py`
   or exposed via any API/runtime selector; see "What was deliberately not
   wired" below.
-- **Case-management provider** - create/update SOC cases, incidents, or
-  tickets. Not built yet; deferred per Issue #4.
+- **Case-management provider** - create SOC cases/incidents/tickets.
+  Interface: `app.case_management.providers.CaseManagementProvider` (new).
+  Implementations: `MockCaseManagementProvider` (in-memory, idempotent per
+  alert ID by default) and `IncidentDeskCaseManagementProvider`
+  (mock-backed HTTP integration). The only category whose operation is a
+  **write** rather than a lookup - see
+  [adr/003-idempotent-writes.md](adr/003-idempotent-writes.md) for why
+  that required a new `BaseIntegrationClient.post()` with idempotency-key
+  support. Foundation only - not yet consumed by the SOC workflow.
 
 ## Internal normalized models: reused, not reinvented
 
@@ -106,6 +113,11 @@ deliberately minimal model was created instead:
 `available`). No CVE lists, patch status, or OS metadata - nothing
 consumes those concepts yet, so they were not spec'd in ahead of a real
 consumer, following the exact same discipline as `EnrichmentResult` above.
+
+Case management is the same story: [`app.models.case.CaseResult`](../app/models/case.py)
+(`case_id`, `status`, `source`) is the entire model - no ticket priority,
+assignee, comments, or timestamps, since nothing consumes those yet
+either.
 
 ## Provider adapter responsibilities
 
@@ -152,6 +164,14 @@ otherwise duplicate:
   Demonstrated by `ThreatIntelClient.list_indicators()` against a
   synthetic multi-page endpoint (not wired into the SOC workflow - nothing
   there needs a bulk indicator listing today).
+- Idempotency-safe writes (`post()`): shares the identical retry/timeout/
+  classification loop as `get()` (`_send_with_retries()`, extracted from
+  `get()` when `post()` was added, not a second implementation), plus a
+  stable `Idempotency-Key` header generated once per call and reused
+  across that call's retries - see
+  [adr/003-idempotent-writes.md](adr/003-idempotent-writes.md) for why a
+  write needed this and a read never did. Demonstrated by
+  `IncidentDeskClient.create_case()`.
 
 It deliberately does **not** implement cross-request concurrency limiting
 or a generic request-building DSL - those remain named as explicit,
@@ -348,14 +368,16 @@ silently resolved:
   `ThreatIntelEnrichmentProvider`, degrading to `FailingEnrichmentProvider`
   (never a silently substituted mock) if construction fails. See
   [configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider).
-- Retries, rate limiting, webhook ingestion, and idempotency are named in
-  Issue #4 as explicit follow-up areas. Timeouts, bounded retry/backoff,
-  and rate-limit (429) handling for the existing enrichment provider were
-  implemented in this phase - see
+- Retries, rate limiting, and webhook ingestion are named in Issue #4 as
+  explicit follow-up areas. Timeouts, bounded retry/backoff, and
+  rate-limit (429) handling for the existing enrichment provider were
+  implemented in a prior phase - see
   [adr/002-provider-resilience.md](adr/002-provider-resilience.md).
   Bounded cursor pagination (`get_paginated()`) was also added, demonstrated
-  by `ThreatIntelClient.list_indicators()`. Webhook ingestion and
-  idempotency remain not implemented.
+  by `ThreatIntelClient.list_indicators()`. Idempotent writes
+  (`post()`, `IncidentDeskClient.create_case()`) were added this phase -
+  see [adr/003-idempotent-writes.md](adr/003-idempotent-writes.md).
+  Webhook ingestion remains not implemented.
 - Cross-request concurrency control (e.g. bounding how many enrichment
   calls run in parallel across a large burst of alerts) is a disclosed
   limitation of the resilience work, not an oversight - see the ADR's
@@ -374,4 +396,11 @@ silently resolved:
   asset criticality should influence triage (a new rule? advisory
   evidence only?) is a design decision deliberately left for when that's
   actually needed, not speculated on now.
-- Case-management provider category is not built yet.
+- Case-management provider category
+  (`app.case_management.providers.CaseManagementProvider`,
+  `MockCaseManagementProvider`, `IncidentDeskCaseManagementProvider`) is
+  built as a foundation, same as vulnerability/asset-context - not wired
+  into `app/services/workflow.py`, `create_app()`, or any API response.
+  Deciding *when* the workflow should open a case (every `ESCALATE`? only
+  after analyst confirmation?) is a product/design decision deliberately
+  left for when that's actually needed, not speculated on now.
