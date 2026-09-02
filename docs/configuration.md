@@ -54,6 +54,10 @@ considered "extra".
 | `THREAT_INTEL_TIMEOUT_SECONDS` | `threat_intel_timeout_seconds` | `5.0` | No | Read timeout for the threat-intel client. Non-numeric or non-positive values **degrade** to the default with a `logger.warning`. See [adr/002-provider-resilience.md](adr/002-provider-resilience.md). |
 | `THREAT_INTEL_MAX_RETRIES` | `threat_intel_max_retries` | `2` | No | Bounds the threat-intel client's retry policy for transient failures (429/502/503/504, timeouts, connection errors). Non-numeric or negative values **degrade** to the default with a `logger.warning`. |
 | `ENRICHMENT_PROVIDER` | `enrichment_provider` | `"mock"` | No | Empty/whitespace-only value **degrades** to the default with a `logger.warning`. Any other non-empty value is used as-is - see "Enrichment provider selection" below for what happens if it can't be constructed. |
+| `ASSET_INTEL_BASE_URL` | `asset_intel_base_url` | `"https://mock-asset-intel.example/v1"` | No | Used by the mock-backed vulnerability/asset-context integration (see [integration-architecture.md](integration-architecture.md)). Not yet consulted by any runtime selector - the provider category isn't wired into the application yet. |
+| `ASSET_INTEL_API_KEY` | `asset_intel_api_key` | `"mock-asset-intel-api-key"` | No | Safe, non-secret default - only ever authenticates against the in-process mocked HTTP transport, never a live vendor. |
+| `ASSET_INTEL_TIMEOUT_SECONDS` | `asset_intel_timeout_seconds` | `5.0` | No | Read timeout for the asset-intel client. Non-numeric or non-positive values **degrade** to the default with a `logger.warning`. |
+| `ASSET_INTEL_MAX_RETRIES` | `asset_intel_max_retries` | `2` | No | Bounds the asset-intel client's retry policy for transient failures (429/502/503/504, timeouts, connection errors). Non-numeric or negative values **degrade** to the default with a `logger.warning`. |
 
 All settings are read once at application-construction time
 (`create_app()` -> `get_settings()`); there is no runtime reconfiguration.
@@ -83,10 +87,11 @@ than applying one blanket policy:
   configuration error.
 - **`LOG_LEVEL` degrades gracefully**, matching the AI settings above - a
   typo'd log level should never prevent the application from starting.
-- **`THREAT_INTEL_*` and `ENRICHMENT_PROVIDER` degrade gracefully**, for
-  the same reason as the AI settings: enrichment failure already has a
-  well-tested fail-closed path (Rule B routes to `ANALYST_REVIEW`), so a
-  misconfigured integration setting should be visible, not fatal.
+- **`THREAT_INTEL_*`, `ASSET_INTEL_*`, and `ENRICHMENT_PROVIDER` degrade
+  gracefully**, for the same reason as the AI settings: enrichment failure
+  already has a well-tested fail-closed path (Rule B routes to
+  `ANALYST_REVIEW`), so a misconfigured integration setting should be
+  visible, not fatal.
 
 ## AI provider selection (`app/main.py: select_investigation_assistant`)
 

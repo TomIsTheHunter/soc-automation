@@ -9,7 +9,11 @@ from app.config import (
     DEFAULT_AI_LIVE_MAX_RETRIES,
     DEFAULT_AI_PROVIDER,
     DEFAULT_AI_TIMEOUT_SECONDS,
+    DEFAULT_ASSET_INTEL_MAX_RETRIES,
+    DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS,
     DEFAULT_MAX_ALERT_BODY_BYTES,
+    DEFAULT_THREAT_INTEL_MAX_RETRIES,
+    DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS,
     Settings,
     get_settings,
 )
@@ -23,6 +27,10 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "AI_LIVE_MAX_RETRIES",
         "ANTHROPIC_API_KEY",
         "ENRICHMENT_PROVIDER",
+        "THREAT_INTEL_TIMEOUT_SECONDS",
+        "THREAT_INTEL_MAX_RETRIES",
+        "ASSET_INTEL_TIMEOUT_SECONDS",
+        "ASSET_INTEL_MAX_RETRIES",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -194,3 +202,65 @@ def test_empty_enrichment_provider_falls_back_to_default_with_warning(
         settings = get_settings()
     assert settings.enrichment_provider == "mock"
     assert any("ENRICHMENT_PROVIDER is empty" in record.getMessage() for record in caplog.records)
+
+
+# --------------------------------------------------------------------------
+# THREAT_INTEL_TIMEOUT_SECONDS / THREAT_INTEL_MAX_RETRIES and their
+# ASSET_INTEL_* equivalents: both degrade to the default (graceful, not
+# fatal) - identical validators, tested together.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("env_var", "default"),
+    [
+        ("THREAT_INTEL_TIMEOUT_SECONDS", DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS),
+        ("ASSET_INTEL_TIMEOUT_SECONDS", DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS),
+    ],
+)
+def test_invalid_integration_timeout_falls_back_to_default_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    env_var: str,
+    default: float,
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv(env_var, "not-a-number")
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        settings = get_settings()
+    field = env_var.lower()
+    assert getattr(settings, field) == default
+    assert any("is not a valid number" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("env_var", "default"),
+    [
+        ("THREAT_INTEL_MAX_RETRIES", DEFAULT_THREAT_INTEL_MAX_RETRIES),
+        ("ASSET_INTEL_MAX_RETRIES", DEFAULT_ASSET_INTEL_MAX_RETRIES),
+    ],
+)
+def test_negative_integration_max_retries_falls_back_to_default_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    env_var: str,
+    default: int,
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv(env_var, "-1")
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        settings = get_settings()
+    field = env_var.lower()
+    assert getattr(settings, field) == default
+    assert any("must not be negative" in record.getMessage() for record in caplog.records)
+
+
+def test_asset_intel_settings_have_safe_non_secret_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    settings = get_settings()
+    assert settings.asset_intel_base_url == "https://mock-asset-intel.example/v1"
+    assert settings.asset_intel_api_key.get_secret_value() == "mock-asset-intel-api-key"
+    assert settings.asset_intel_timeout_seconds == DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS
+    assert settings.asset_intel_max_retries == DEFAULT_ASSET_INTEL_MAX_RETRIES

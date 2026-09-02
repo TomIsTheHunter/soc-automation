@@ -47,6 +47,13 @@ Each setting has a documented, intentional behavior when missing or invalid
   graceful-degrade pattern as `AI_PROVIDER`. Any other value attempts the
   mock-backed threat-intel integration; see
   `app/main.py: select_enrichment_provider`.
+- `ASSET_INTEL_BASE_URL` / `ASSET_INTEL_API_KEY` / `ASSET_INTEL_TIMEOUT_SECONDS`
+  / `ASSET_INTEL_MAX_RETRIES`: configuration for the mock-backed
+  vulnerability/asset-context integration
+  (`app/integrations/vulnerability/asset_intel.py`), mirroring the
+  `THREAT_INTEL_*` settings exactly. Not yet consulted by any runtime
+  selector - see docs/integration-architecture.md's "What was
+  deliberately not wired".
 """
 
 import logging
@@ -69,6 +76,12 @@ DEFAULT_THREAT_INTEL_API_KEY = "mock-threat-intel-api-key"
 DEFAULT_THREAT_INTEL_TIMEOUT_SECONDS = 5.0
 DEFAULT_THREAT_INTEL_MAX_RETRIES = 2
 DEFAULT_ENRICHMENT_PROVIDER = "mock"
+DEFAULT_ASSET_INTEL_BASE_URL = "https://mock-asset-intel.example/v1"
+# Not a real secret: this placeholder only ever authenticates against the
+# in-process mocked HTTP transport in asset_intel.py, never a live vendor.
+DEFAULT_ASSET_INTEL_API_KEY = "mock-asset-intel-api-key"
+DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS = 5.0
+DEFAULT_ASSET_INTEL_MAX_RETRIES = 2
 
 
 class Settings(BaseSettings):
@@ -106,6 +119,18 @@ class Settings(BaseSettings):
     )
     enrichment_provider: str = Field(
         default=DEFAULT_ENRICHMENT_PROVIDER, alias="ENRICHMENT_PROVIDER"
+    )
+    asset_intel_base_url: str = Field(
+        default=DEFAULT_ASSET_INTEL_BASE_URL, alias="ASSET_INTEL_BASE_URL"
+    )
+    asset_intel_api_key: SecretStr = Field(
+        default=SecretStr(DEFAULT_ASSET_INTEL_API_KEY), alias="ASSET_INTEL_API_KEY"
+    )
+    asset_intel_timeout_seconds: float = Field(
+        default=DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS, alias="ASSET_INTEL_TIMEOUT_SECONDS"
+    )
+    asset_intel_max_retries: int = Field(
+        default=DEFAULT_ASSET_INTEL_MAX_RETRIES, alias="ASSET_INTEL_MAX_RETRIES"
     )
 
     @field_validator("ai_provider", mode="before")
@@ -231,6 +256,52 @@ class Settings(BaseSettings):
             )
             return DEFAULT_ENRICHMENT_PROVIDER
         return value
+
+    @field_validator("asset_intel_timeout_seconds", mode="before")
+    @classmethod
+    def _validate_asset_intel_timeout(cls, value: object) -> object:
+        if value is None or value == "":
+            return DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS
+        try:
+            parsed = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            logger.warning(
+                "ASSET_INTEL_TIMEOUT_SECONDS=%r is not a valid number; using default %.1fs",
+                value,
+                DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS,
+            )
+            return DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS
+        if parsed <= 0:
+            logger.warning(
+                "ASSET_INTEL_TIMEOUT_SECONDS=%s must be positive; using default %.1fs",
+                parsed,
+                DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS,
+            )
+            return DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS
+        return parsed
+
+    @field_validator("asset_intel_max_retries", mode="before")
+    @classmethod
+    def _validate_asset_intel_max_retries(cls, value: object) -> object:
+        if value is None or value == "":
+            return DEFAULT_ASSET_INTEL_MAX_RETRIES
+        try:
+            parsed = int(value)  # type: ignore[call-overload]
+        except (TypeError, ValueError):
+            logger.warning(
+                "ASSET_INTEL_MAX_RETRIES=%r is not a valid integer; using default %d",
+                value,
+                DEFAULT_ASSET_INTEL_MAX_RETRIES,
+            )
+            return DEFAULT_ASSET_INTEL_MAX_RETRIES
+        if parsed < 0:
+            logger.warning(
+                "ASSET_INTEL_MAX_RETRIES=%d must not be negative; using default %d",
+                parsed,
+                DEFAULT_ASSET_INTEL_MAX_RETRIES,
+            )
+            return DEFAULT_ASSET_INTEL_MAX_RETRIES
+        return parsed
 
 
 def get_settings() -> Settings:
