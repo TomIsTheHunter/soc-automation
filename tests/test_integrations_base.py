@@ -432,3 +432,83 @@ def test_get_paginated_raises_validation_error_for_missing_items_key() -> None:
     client = _client(httpx.MockTransport(handler))
     with pytest.raises(IntegrationValidationError):
         client.get_paginated("/things")
+
+
+# --- POST + idempotency -------------------------------------------------
+
+
+def test_post_returns_parsed_json_body() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, json={"created": True})
+
+    client = _client(httpx.MockTransport(handler))
+    assert client.post("/things", json_body={"name": "x"}) == {"created": True}
+
+
+def test_post_generates_an_idempotency_key_when_none_supplied() -> None:
+    seen_headers: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.update(request.headers)
+        return httpx.Response(201, json={"created": True})
+
+    client = _client(httpx.MockTransport(handler))
+    client.post("/things", json_body={"name": "x"})
+    assert seen_headers["idempotency-key"]
+
+
+def test_post_uses_the_supplied_idempotency_key() -> None:
+    seen_headers: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.update(request.headers)
+        return httpx.Response(201, json={"created": True})
+
+    client = _client(httpx.MockTransport(handler))
+    client.post("/things", json_body={"name": "x"}, idempotency_key="fixed-key-123")
+    assert seen_headers["idempotency-key"] == "fixed-key-123"
+
+
+def test_post_reuses_the_same_idempotency_key_across_retries() -> None:
+    """The property that makes retrying a POST safe: every retry of one
+    logical call carries the identical Idempotency-Key, never a fresh one."""
+    seen_keys: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_keys.append(request.headers["idempotency-key"])
+        if len(seen_keys) < 3:
+            return httpx.Response(503, text="bad gateway")
+        return httpx.Response(201, json={"created": True})
+
+    client = _client(httpx.MockTransport(handler))
+    client.post("/things", json_body={"name": "x"})
+    assert len(seen_keys) == 3
+    assert len(set(seen_keys)) == 1
+
+
+def test_post_retryable_failure_then_success() -> None:
+    calls: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(503, text="bad gateway")
+        return httpx.Response(201, json={"created": True})
+
+    client = _client(httpx.MockTransport(handler))
+    assert client.post("/things", json_body={"name": "x"}) == {"created": True}
+    assert len(calls) == 2
+
+
+def test_post_non_retryable_failure_raises_immediately_without_leaking_credentials() -> None:
+    calls: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(401, json={"error": "denied"})
+
+    client = _client(httpx.MockTransport(handler))
+    with pytest.raises(IntegrationAuthError) as excinfo:
+        client.post("/things", json_body={"name": "x"})
+    assert len(calls) == 1
+    assert API_KEY not in str(excinfo.value)

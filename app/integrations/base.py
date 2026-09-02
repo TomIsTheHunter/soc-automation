@@ -16,10 +16,12 @@ Deliberately minimal: two small auth strategies, one retry policy
 dataclass, and one client class - no plugin registry, generic
 request-building DSL, or second retry framework. Cursor-based pagination
 is supported via `get_paginated()`, itself just a bounded loop over the
-existing `get()` (retries/timeouts/logging already apply per page);
-provider-specific/concurrency-based rate limiting remains out of scope
-(see docs/integration-architecture.md) and should be added here only when
-a provider actually needs it.
+existing `get()` (retries/timeouts/logging already apply per page).
+`post()` shares the exact same retry loop (`_send_with_retries()`) and
+adds a stable `Idempotency-Key` header so retrying a write is safe - see
+docs/adr/003-idempotent-writes.md. Provider-specific/concurrency-based
+rate limiting remains out of scope (see docs/integration-architecture.md)
+and should be added here only when a provider actually needs it.
 """
 
 import logging
@@ -28,6 +30,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
+from uuid import uuid4
 
 import httpx
 
@@ -158,21 +161,65 @@ class BaseIntegrationClient:
         """
         operation_name = operation or path
         headers = {"Accept": "application/json", **self._auth.headers()}
+        return self._send_with_retries(
+            lambda: self._client.get(path, params=params, headers=headers),
+            operation=operation_name,
+        )
+
+    def post(
+        self,
+        path: str,
+        *,
+        json_body: dict[str, Any],
+        idempotency_key: str | None = None,
+        operation: str | None = None,
+    ) -> dict[str, Any]:
+        """Perform an authenticated, idempotency-safe POST and return the JSON body.
+
+        A stable `Idempotency-Key` header is generated once per call (if
+        not supplied) and reused across every retry of *this* call, so a
+        retried POST after a transient failure is recognized by a
+        conformant vendor as the same logical request, never a duplicate
+        side effect. Pass an explicit `idempotency_key` derived from a
+        stable business identifier (e.g. the alert ID) if the *caller*
+        also needs the request to be safe to repeat across separate
+        calls, not just across this call's internal retries. See
+        docs/adr/003-idempotent-writes.md.
+
+        Same retry/timeout/error-classification policy as `get()` - only
+        the HTTP method, body, and idempotency header differ.
+        """
+        operation_name = operation or path
+        key = idempotency_key or str(uuid4())
+        headers = {
+            "Accept": "application/json",
+            "Idempotency-Key": key,
+            **self._auth.headers(),
+        }
+        return self._send_with_retries(
+            lambda: self._client.post(path, json=json_body, headers=headers),
+            operation=operation_name,
+        )
+
+    def _send_with_retries(
+        self, send: Callable[[], httpx.Response], *, operation: str
+    ) -> dict[str, Any]:
+        """Shared retry/timeout/classification loop used by both `get()` and `post()`."""
         attempt = 0
         while True:
             attempt += 1
             started = time.perf_counter()
             try:
-                response = self._client.get(path, params=params, headers=headers)
+                response = send()
             except httpx.TimeoutException as exc:
-                if self._retry_after_exception(exc, attempt, operation_name, started):
+                if self._retry_after_exception(exc, attempt, operation, started):
                     continue
                 raise IntegrationTimeoutError(
                     f"Request to {self.provider_name} timed out after {attempt} attempt(s)",
                     provider=self.provider_name,
                 ) from exc
             except httpx.TransportError as exc:
-                if self._retry_after_exception(exc, attempt, operation_name, started):
+                if self._retry_after_exception(exc, attempt, operation, started):
                     continue
                 raise IntegrationTimeoutError(
                     f"Request to {self.provider_name} failed after {attempt} attempt(s) "
@@ -181,7 +228,7 @@ class BaseIntegrationClient:
                 ) from exc
             except httpx.HTTPError as exc:
                 self._log_failure(
-                    operation_name, attempt, None, type(exc).__name__, _elapsed_ms(started)
+                    operation, attempt, None, type(exc).__name__, _elapsed_ms(started)
                 )
                 raise IntegrationUnexpectedError(
                     f"Request to {self.provider_name} failed", provider=self.provider_name
@@ -197,7 +244,7 @@ class BaseIntegrationClient:
                     f"(attempt {attempt}/{self._retry_policy.max_attempts})",
                     event="provider_retry",
                     provider=self.provider_name,
-                    operation=operation_name,
+                    operation=operation,
                     attempt=attempt,
                     status_code=status,
                     duration_ms=_elapsed_ms(started),
@@ -205,7 +252,7 @@ class BaseIntegrationClient:
                 )
                 self._sleep(delay)
                 continue
-            return self._parse_response(response, operation_name, attempt, _elapsed_ms(started))
+            return self._parse_response(response, operation, attempt, _elapsed_ms(started))
 
     def get_paginated(
         self,
