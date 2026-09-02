@@ -20,6 +20,7 @@ from app.models.investigation import (
     RecommendedAction,
 )
 from app.models.vulnerability import AssetCriticality, VulnerabilityContext
+from app.models.webhook import IncidentDeskWebhookEvent, IncidentDeskWebhookPayload
 from app.models.workflow import (
     Confidence,
     EnrichmentResult,
@@ -48,6 +49,8 @@ __all__ = [
     "EnrichmentResult",
     "ErrorDetail",
     "ErrorResponse",
+    "IncidentDeskWebhookEvent",
+    "IncidentDeskWebhookPayload",
     "Indicator",
     "IndicatorType",
     "InvestigationAlertContext",

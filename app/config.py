@@ -54,6 +54,12 @@ Each setting has a documented, intentional behavior when missing or invalid
   `THREAT_INTEL_*` settings exactly. Not yet consulted by any runtime
   selector - see docs/integration-architecture.md's "What was
   deliberately not wired".
+- `INCIDENT_DESK_WEBHOOK_SECRET`: HMAC-SHA256 shared secret used to
+  verify inbound IncidentDesk webhooks (`app/api/webhooks.py`). Safe,
+  non-secret default for the mock/demo integration, same reasoning as
+  `THREAT_INTEL_API_KEY` - see docs/adr/004-webhook-ingestion.md.
+- `MAX_WEBHOOK_BODY_BYTES`: safe default (16 KiB). Same fail-fast policy
+  as `MAX_ALERT_BODY_BYTES` - a safety limit, not a tuning knob.
 """
 
 import logging
@@ -82,6 +88,10 @@ DEFAULT_ASSET_INTEL_BASE_URL = "https://mock-asset-intel.example/v1"
 DEFAULT_ASSET_INTEL_API_KEY = "mock-asset-intel-api-key"
 DEFAULT_ASSET_INTEL_TIMEOUT_SECONDS = 5.0
 DEFAULT_ASSET_INTEL_MAX_RETRIES = 2
+# Not a real secret: this placeholder only ever verifies the mock webhook
+# fixtures used in this app's own tests/demo, never a live vendor.
+DEFAULT_INCIDENT_DESK_WEBHOOK_SECRET = "mock-incident-desk-webhook-secret"
+DEFAULT_MAX_WEBHOOK_BODY_BYTES = 16 * 1024
 
 
 class Settings(BaseSettings):
@@ -131,6 +141,13 @@ class Settings(BaseSettings):
     )
     asset_intel_max_retries: int = Field(
         default=DEFAULT_ASSET_INTEL_MAX_RETRIES, alias="ASSET_INTEL_MAX_RETRIES"
+    )
+    incident_desk_webhook_secret: SecretStr = Field(
+        default=SecretStr(DEFAULT_INCIDENT_DESK_WEBHOOK_SECRET),
+        alias="INCIDENT_DESK_WEBHOOK_SECRET",
+    )
+    max_webhook_body_bytes: int = Field(
+        default=DEFAULT_MAX_WEBHOOK_BODY_BYTES, gt=0, alias="MAX_WEBHOOK_BODY_BYTES"
     )
 
     @field_validator("ai_provider", mode="before")

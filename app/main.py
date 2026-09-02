@@ -1,4 +1,5 @@
 import logging
+from collections import OrderedDict
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -8,7 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.routes import router
-from app.config import DEFAULT_MAX_ALERT_BODY_BYTES, Settings, get_settings
+from app.api.webhooks import router as webhooks_router
+from app.config import Settings, get_settings
 from app.enrichment.providers import (
     EnrichmentProvider,
     FailingEnrichmentProvider,
@@ -114,23 +116,36 @@ def select_enrichment_provider(settings: Settings | None = None) -> EnrichmentPr
         return FailingEnrichmentProvider()
 
 
-class AlertBodySizeLimitMiddleware:
-    def __init__(self, app: ASGIApp, max_bytes: int = DEFAULT_MAX_ALERT_BODY_BYTES) -> None:
+class RequestBodySizeLimitMiddleware:
+    """Rejects oversized request bodies for specific paths before they are read into memory.
+
+    Checks `Content-Length` at the ASGI-scope level, before any route
+    handler or Pydantic model ever sees the body. `limits` maps an exact
+    request path to its own max byte count, so different endpoints
+    (alert ingestion vs. webhook ingestion) can have different limits
+    without duplicating this middleware.
+    """
+
+    def __init__(self, app: ASGIApp, limits: dict[str, int]) -> None:
         self.app = app
-        self.max_bytes = max_bytes
+        self.limits = limits
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope.get("type") != "http" or scope.get("path") != "/api/v1/alerts":
+        path = scope.get("path")
+        max_bytes = (
+            self.limits.get(path) if scope.get("type") == "http" and isinstance(path, str) else None
+        )
+        if max_bytes is None:
             await self.app(scope, receive, send)
             return
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         content_length = headers.get(b"content-length")
-        if content_length is not None and int(content_length) > self.max_bytes:
+        if content_length is not None and int(content_length) > max_bytes:
             log_event(
                 logger,
                 logging.WARNING,
-                f"Rejected oversized request body: path={scope.get('path')} "
-                f"content_length={content_length.decode('latin-1')} max_bytes={self.max_bytes}",
+                f"Rejected oversized request body: path={path} "
+                f"content_length={content_length.decode('latin-1')} max_bytes={max_bytes}",
                 event="request_rejected",
                 workflow_stage="received",
                 result="rejected",
@@ -141,7 +156,7 @@ class AlertBodySizeLimitMiddleware:
                 content=ErrorResponse(
                     error=ErrorDetail(
                         code="request_too_large",
-                        message=f"request body exceeds {self.max_bytes} bytes",
+                        message=f"request body exceeds {max_bytes} bytes",
                     )
                 ).model_dump(mode="json"),
             )
@@ -187,8 +202,13 @@ def create_app(
         if ai_timeout_seconds is not None
         else settings.ai_provider_timeout_seconds
     )
+    application.state.webhook_delivery_ids_seen = OrderedDict()
     application.add_middleware(
-        AlertBodySizeLimitMiddleware, max_bytes=settings.max_alert_body_bytes
+        RequestBodySizeLimitMiddleware,
+        limits={
+            "/api/v1/alerts": settings.max_alert_body_bytes,
+            "/api/v1/webhooks/incident-desk": settings.max_webhook_body_bytes,
+        },
     )
     application.mount(
         "/static",
@@ -197,6 +217,7 @@ def create_app(
     )
     application.include_router(web_router)
     application.include_router(router)
+    application.include_router(webhooks_router)
 
     @application.get("/health", tags=["health"])
     def health() -> dict[str, str]:
