@@ -4,6 +4,7 @@ from app.models.alert import (
     NormalizedAlert,
     Severity,
 )
+from app.models.case import CaseResult, CaseStatus
 from app.models.errors import ErrorDetail, ErrorResponse
 from app.models.investigation import (
     INVESTIGATION_RESULT_SCHEMA_VERSION,
@@ -39,6 +40,8 @@ __all__ = [
     "AIRiskAssessment",
     "AIStatus",
     "AssetCriticality",
+    "CaseResult",
+    "CaseStatus",
     "Confidence",
     "CrowdStrikeStyleAlert",
     "DeterministicTriageContext",
