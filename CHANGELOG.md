@@ -83,6 +83,23 @@ All notable changes to this project are documented in this file.
   [docs/adr/003-idempotent-writes.md](docs/adr/003-idempotent-writes.md).
   Foundation only - not wired into `app/services/workflow.py` or
   `create_app()`.
+- Inbound webhook ingestion: new `POST /api/v1/webhooks/incident-desk`
+  (`app/api/webhooks.py`), the one inbound boundary in the integration
+  layer. HMAC-SHA256 signature verification (`X-Incident-Desk-Signature`,
+  constant-time comparison via `hmac.compare_digest`, verified over the
+  raw request body before any JSON parsing) with fail-closed behavior on
+  anything missing/malformed/non-matching. Strict schema validation
+  (`app.models.webhook.IncidentDeskWebhookPayload`, mirroring
+  `CrowdStrikeStyleAlert`'s conventions) after signature verification.
+  Bounded in-memory duplicate-delivery detection (`delivery_id`, capped
+  at 1000 tracked deliveries, LRU-evicted). Generalized the existing
+  `AlertBodySizeLimitMiddleware` into `RequestBodySizeLimitMiddleware`
+  (a path -> byte-limit map) to also cover the new endpoint's smaller
+  size limit, rather than adding a second size-limiting middleware. New
+  `INCIDENT_DESK_WEBHOOK_SECRET`/`MAX_WEBHOOK_BODY_BYTES` settings. A
+  verified webhook is logged and acknowledged, not persisted - this
+  application has no database. See
+  [docs/adr/004-webhook-ingestion.md](docs/adr/004-webhook-ingestion.md).
 
 ## [0.3.0] - 2026-08-26
 

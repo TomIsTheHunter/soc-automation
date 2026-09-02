@@ -18,9 +18,12 @@ enrichment-provider selector (`ENRICHMENT_PROVIDER`, see
 bounded cursor pagination (`BaseIntegrationClient.get_paginated`), the
 vulnerability/asset-context provider category, and the case-management
 provider category with idempotent writes (see
-[adr/003-idempotent-writes.md](adr/003-idempotent-writes.md)). Webhook
-ingestion remains explicitly deferred to later in Sprint 2 (see Issue #4)
-- the boundaries below are shaped so it can be added without a rewrite.
+[adr/003-idempotent-writes.md](adr/003-idempotent-writes.md)). A final
+follow-up added inbound webhook ingestion with signature verification
+(see [adr/004-webhook-ingestion.md](adr/004-webhook-ingestion.md)),
+completing every area named in Issue #4 except pagination-adjacent
+extras (concurrency limiting) and the vulnerability/case-management
+categories' workflow wiring, both explicitly disclosed as deferred below.
 
 ## Why an integration layer exists
 
@@ -295,6 +298,44 @@ code changed to support this new provider.
     secret, and is treated the same as the existing synthetic hash/IP
     constants in `app/enrichment/table.py` and `fixtures/alerts.py`.
 
+## Webhook ingestion (inbound)
+
+Every provider category above is outbound: this platform calls a vendor.
+`app/api/webhooks.py`'s `POST /api/v1/webhooks/incident-desk` is the one
+**inbound** boundary - a vendor calling this platform, e.g. to push a
+case-status update this platform cannot poll for. That is a materially
+different trust boundary (anyone on the network can attempt to call it,
+not just this application on its own schedule), so it needed its own
+security model rather than reusing the outbound `BaseIntegrationClient`
+machinery. See [adr/004-webhook-ingestion.md](adr/004-webhook-ingestion.md)
+for the full design; summarized here:
+
+- **HMAC-SHA256 signature verification** (`X-Incident-Desk-Signature:
+  sha256=<hexdigest>`, computed over the raw request body, checked with
+  `hmac.compare_digest` before any JSON parsing) - fail closed on
+  missing/malformed/non-matching signatures (401).
+- **Strict schema validation** (`IncidentDeskWebhookPayload`,
+  `extra="forbid"`, UTC-aware timestamp, controlled `event`/`status`
+  vocabularies) after signature verification - a valid signature proves
+  authenticity, not content validity (422 on schema failure).
+- **Bounded in-memory duplicate-delivery detection** (`delivery_id`,
+  capped at 1000 tracked deliveries via an LRU) - most webhook providers
+  retry, so the same delivery can legitimately arrive twice; a duplicate
+  is acknowledged (200), not rejected.
+- **Request body size limit before the body is read**: the existing
+  `AlertBodySizeLimitMiddleware` was generalized into
+  `RequestBodySizeLimitMiddleware` (a path -> byte-limit map) rather than
+  writing a second, parallel size-limiting middleware for this one new
+  path.
+- **No persistence**: a verified webhook is logged
+  (`event="webhook_received"`) and acknowledged - it does not update any
+  case record, because this application has no database (see
+  [architecture.md](architecture.md)) and this phase does not add one.
+
+New settings: `INCIDENT_DESK_WEBHOOK_SECRET` (safe mock default, mirroring
+`THREAT_INTEL_API_KEY`) and `MAX_WEBHOOK_BODY_BYTES` (fail-fast, mirroring
+`MAX_ALERT_BODY_BYTES`).
+
 ## Provider interchangeability - demonstrated, not just asserted
 
 `tests/test_threat_intel_provider.py::test_provider_interchangeability_with_deterministic_triage`
@@ -368,16 +409,16 @@ silently resolved:
   `ThreatIntelEnrichmentProvider`, degrading to `FailingEnrichmentProvider`
   (never a silently substituted mock) if construction fails. See
   [configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider).
-- Retries, rate limiting, and webhook ingestion are named in Issue #4 as
-  explicit follow-up areas. Timeouts, bounded retry/backoff, and
-  rate-limit (429) handling for the existing enrichment provider were
-  implemented in a prior phase - see
+- Retries and rate limiting were implemented in a prior phase - see
   [adr/002-provider-resilience.md](adr/002-provider-resilience.md).
   Bounded cursor pagination (`get_paginated()`) was also added, demonstrated
   by `ThreatIntelClient.list_indicators()`. Idempotent writes
-  (`post()`, `IncidentDeskClient.create_case()`) were added this phase -
-  see [adr/003-idempotent-writes.md](adr/003-idempotent-writes.md).
-  Webhook ingestion remains not implemented.
+  (`post()`, `IncidentDeskClient.create_case()`) were added in a later
+  phase - see [adr/003-idempotent-writes.md](adr/003-idempotent-writes.md).
+  Webhook ingestion (`POST /api/v1/webhooks/incident-desk`) was added
+  this phase - see [adr/004-webhook-ingestion.md](adr/004-webhook-ingestion.md).
+  Every area originally named in Issue #4 has now been addressed at the
+  foundation level.
 - Cross-request concurrency control (e.g. bounding how many enrichment
   calls run in parallel across a large burst of alerts) is a disclosed
   limitation of the resilience work, not an oversight - see the ADR's
@@ -404,3 +445,12 @@ silently resolved:
   Deciding *when* the workflow should open a case (every `ESCALATE`? only
   after analyst confirmation?) is a product/design decision deliberately
   left for when that's actually needed, not speculated on now.
+- The webhook endpoint (`app/api/webhooks.py`) verifies and acknowledges
+  inbound case-status updates but does not persist or act on them - this
+  application has no database (see [architecture.md](architecture.md)),
+  so there is nothing to update. It is also not called by anything in
+  this application; it exists purely to receive vendor-initiated
+  requests. Duplicate-delivery tracking
+  (`application.state.webhook_delivery_ids_seen`) is in-memory and
+  per-process - it does not survive a restart and would need a shared
+  store (e.g. Redis) behind more than one running instance.

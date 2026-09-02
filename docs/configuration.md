@@ -58,6 +58,8 @@ considered "extra".
 | `ASSET_INTEL_API_KEY` | `asset_intel_api_key` | `"mock-asset-intel-api-key"` | No | Safe, non-secret default - only ever authenticates against the in-process mocked HTTP transport, never a live vendor. |
 | `ASSET_INTEL_TIMEOUT_SECONDS` | `asset_intel_timeout_seconds` | `5.0` | No | Read timeout for the asset-intel client. Non-numeric or non-positive values **degrade** to the default with a `logger.warning`. |
 | `ASSET_INTEL_MAX_RETRIES` | `asset_intel_max_retries` | `2` | No | Bounds the asset-intel client's retry policy for transient failures (429/502/503/504, timeouts, connection errors). Non-numeric or negative values **degrade** to the default with a `logger.warning`. |
+| `INCIDENT_DESK_WEBHOOK_SECRET` | `incident_desk_webhook_secret` | `"mock-incident-desk-webhook-secret"` | No | HMAC-SHA256 shared secret used to verify inbound webhooks (see [adr/004-webhook-ingestion.md](adr/004-webhook-ingestion.md)). Safe, non-secret default for the mock/demo integration - rotate for any real deployment. |
+| `MAX_WEBHOOK_BODY_BYTES` | `max_webhook_body_bytes` | `16384` (16 KiB) | No | Non-numeric or non-positive values **fail fast**: `Settings()` raises `pydantic.ValidationError` at startup - same policy as `MAX_ALERT_BODY_BYTES`. |
 
 All settings are read once at application-construction time
 (`create_app()` -> `get_settings()`); there is no runtime reconfiguration.
@@ -75,11 +77,11 @@ than applying one blanket policy:
   misconfigured AI setting would reduce availability for no safety
   benefit. A misconfiguration is still visible (a `logger.warning`), just
   not fatal.
-- **`MAX_ALERT_BODY_BYTES` fails fast.** This is a safety limit that bounds
-  how much untrusted request data the process will buffer, not an
-  operational tuning knob with a forgiving fallback. A malformed value here
-  (e.g. a typo'd negative number) should be loud and immediate at startup,
-  not silently ignored.
+- **`MAX_ALERT_BODY_BYTES` (and `MAX_WEBHOOK_BODY_BYTES`) fail fast.**
+  These are safety limits that bound how much untrusted request data the
+  process will buffer, not operational tuning knobs with a forgiving
+  fallback. A malformed value here (e.g. a typo'd negative number) should
+  be loud and immediate at startup, not silently ignored.
 - **`ANTHROPIC_API_KEY` has no default and is never required at startup.**
   The default provider (`mock`) never reads it. It is only consulted if
   `AI_PROVIDER` explicitly selects a live provider, and its absence there is
@@ -92,6 +94,11 @@ than applying one blanket policy:
   already has a well-tested fail-closed path (Rule B routes to
   `ANALYST_REVIEW`), so a misconfigured integration setting should be
   visible, not fatal.
+- **`INCIDENT_DESK_WEBHOOK_SECRET` has a safe, non-secret default** for
+  the mock/demo integration, matching `THREAT_INTEL_API_KEY`/
+  `ASSET_INTEL_API_KEY` - see
+  [adr/004-webhook-ingestion.md](adr/004-webhook-ingestion.md) for why
+  this must be rotated for any real deployment.
 
 ## AI provider selection (`app/main.py: select_investigation_assistant`)
 
