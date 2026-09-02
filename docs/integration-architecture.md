@@ -14,12 +14,13 @@ provider. Tuesday (see
 timeouts, bounded retry/backoff, and rate-limit (429/`Retry-After`)
 handling on top of that same foundation. A follow-up pass added a runtime
 enrichment-provider selector (`ENRICHMENT_PROVIDER`, see
-[configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider))
-and bounded cursor pagination (`BaseIntegrationClient.get_paginated`).
-Webhook ingestion, idempotency, and the vulnerability/case-management
-provider categories remain explicitly deferred to later in Sprint 2 (see
-Issue #4) - the boundaries below are shaped so they can be added without a
-rewrite.
+[configuration.md](configuration.md#enrichment-provider-selection-appmainpy-select_enrichment_provider)),
+bounded cursor pagination (`BaseIntegrationClient.get_paginated`), and a
+second provider category foundation (vulnerability/asset context, see
+below - not yet wired into the SOC workflow). Case-management, webhook
+ingestion, and idempotency remain explicitly deferred to later in Sprint 2
+(see Issue #4) - the boundaries below are shaped so they can be added
+without a rewrite.
 
 ## Why an integration layer exists
 
@@ -48,9 +49,9 @@ SOC Automation Platform
     /       |       \
 Enrichment Vulnerability Case Management
     |          |          |
- Provider A  (Sprint 2,  (Sprint 2,
- Provider B   not yet     not yet
- (this doc)   built)      built)
+ Provider A  Provider A  (Sprint 2,
+ Provider B  (this doc)   not yet
+ (this doc)               built)
 ```
 
 - **Enrichment provider** - enrich security indicators (IPs, domains, URLs,
@@ -59,9 +60,14 @@ Enrichment Vulnerability Case Management
   (in-memory, pre-existing) and `ThreatIntelEnrichmentProvider` (new,
   mock-backed HTTP integration, this phase).
 - **Vulnerability/context provider** - retrieve vulnerability or asset
-  context. Not built this phase; deferred per Issue #4.
+  context for a hostname. Interface: `app.vulnerability.providers.VulnerabilityProvider`
+  (new, mirroring `EnrichmentProvider`). Implementations: `MockVulnerabilityProvider`
+  (in-memory) and `AssetIntelVulnerabilityProvider` (mock-backed HTTP
+  integration). Foundation only - not yet consumed by `app/services/workflow.py`
+  or exposed via any API/runtime selector; see "What was deliberately not
+  wired" below.
 - **Case-management provider** - create/update SOC cases, incidents, or
-  tickets. Not built this phase; deferred per Issue #4.
+  tickets. Not built yet; deferred per Issue #4.
 
 ## Internal normalized models: reused, not reinvented
 
@@ -91,6 +97,15 @@ hand - not speculatively now.
 ```
 Provider API response -> Provider adapter -> EnrichmentResult -> SOC workflow / triage engine
 ```
+
+The vulnerability/asset-context category has no pre-existing model to
+reuse (the workflow never handled this concept before), so a new,
+deliberately minimal model was created instead:
+[`app.models.vulnerability.VulnerabilityContext`](../app/models/vulnerability.py)
+(`hostname`, `criticality`, `critical_vulnerability_count`, `source`,
+`available`). No CVE lists, patch status, or OS metadata - nothing
+consumes those concepts yet, so they were not spec'd in ahead of a real
+consumer, following the exact same discipline as `EnrichmentResult` above.
 
 ## Provider adapter responsibilities
 
@@ -345,5 +360,18 @@ silently resolved:
   calls run in parallel across a large burst of alerts) is a disclosed
   limitation of the resilience work, not an oversight - see the ADR's
   "Scale Implications" section.
-- Vulnerability/context and case-management provider categories are not
-  built this phase.
+- The vulnerability/asset-context provider category
+  (`app.vulnerability.providers.VulnerabilityProvider`,
+  `MockVulnerabilityProvider`, `AssetIntelVulnerabilityProvider`) exists
+  as a foundation, mirroring the enrichment category's shape exactly, but
+  is **not** wired into `app/services/workflow.py`, `create_app()`, or any
+  API response - nothing in the current workflow/triage logic consumes
+  asset criticality or vulnerability counts yet, so there is no runtime
+  selector (no `VULNERABILITY_PROVIDER` setting) and no
+  `application.state.vulnerability_provider`. `ASSET_INTEL_*` settings
+  exist in `Settings` (mirroring `THREAT_INTEL_*`) so wiring is a small,
+  low-risk follow-up once a concrete consumer exists - deciding *how*
+  asset criticality should influence triage (a new rule? advisory
+  evidence only?) is a design decision deliberately left for when that's
+  actually needed, not speculated on now.
+- Case-management provider category is not built yet.

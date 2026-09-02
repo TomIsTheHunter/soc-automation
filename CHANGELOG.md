@@ -51,6 +51,21 @@ All notable changes to this project are documented in this file.
   multi-page `/indicators/list` endpoint - not wired into
   `ThreatIntelEnrichmentProvider`/the SOC workflow, since nothing there
   needs a bulk indicator listing today.
+- Vulnerability/asset-context provider category foundation: new
+  `app.vulnerability.providers.VulnerabilityProvider` interface (mirroring
+  `EnrichmentProvider`), `MockVulnerabilityProvider` (in-memory synthetic,
+  keyed by the existing fixture hostnames), and
+  `AssetIntelVulnerabilityProvider` (mock-backed HTTP integration,
+  `app/integrations/vulnerability/asset_intel.py`, reusing
+  `BaseIntegrationClient` as-is). New minimal
+  `app.models.vulnerability.VulnerabilityContext` model (`hostname`,
+  `criticality`, `critical_vulnerability_count`) - no speculative fields.
+  New `ASSET_INTEL_BASE_URL`/`ASSET_INTEL_API_KEY`/
+  `ASSET_INTEL_TIMEOUT_SECONDS`/`ASSET_INTEL_MAX_RETRIES` settings,
+  mirroring `THREAT_INTEL_*`. Foundation only - not wired into
+  `app/services/workflow.py` or `create_app()`; see
+  [docs/integration-architecture.md](docs/integration-architecture.md)'s
+  "What was deliberately not wired".
 
 ## [0.3.0] - 2026-08-26
 
