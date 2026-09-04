@@ -100,6 +100,38 @@ All notable changes to this project are documented in this file.
   verified webhook is logged and acknowledged, not persisted - this
   application has no database. See
   [docs/adr/004-webhook-ingestion.md](docs/adr/004-webhook-ingestion.md).
+- Pagination, schema validation, and data contracts for the vulnerability
+  provider: `BaseIntegrationClient.get_paginated()` now returns a typed
+  `PaginatedResult` (`items`, `complete`, `pages_fetched`,
+  `truncated_reason`) instead of a bare list, so a deliberately bounded
+  or truncated collection (max pages/items reached, duplicate-cursor
+  loop detected) can never be mistaken for a complete one; a genuine
+  page-fetch failure still propagates as an `IntegrationError`, never a
+  partial "successful" result. Also handles a provider indicating more
+  data (`has_more`) without supplying the required next-cursor. New
+  `max_items` bound alongside the existing `max_pages`.
+  `ThreatIntelClient.list_indicators()` updated to enforce
+  `complete=True`.
+  New `AssetIntelClient.list_vulnerability_findings()` /
+  `AssetIntelVulnerabilityProvider.list_findings()` /
+  `VulnerabilityProvider.list_findings()`: a realistic page-token-based
+  paginated findings collection, entirely through the existing resilient
+  HTTP client (no separate pagination path). New normalized
+  `app.models.vulnerability.VulnerabilityFinding` /
+  `VulnerabilityCollectionResult` models, plus `VulnerabilitySeverity`/
+  `RemediationStatus` enums (deliberately not reusing `AssetCriticality`
+  for severity - different questions, despite overlapping values).
+  Provider-schema evolution handled explicitly: harmless new fields
+  tolerated (`extra="ignore"`, a deliberate divergence from the stricter
+  single-asset lookup schema's `extra="forbid"`); missing required
+  fields, null security-relevant fields, and type changes (e.g.
+  `cvss_score` becoming a string) all rejected via `Field(strict=True)`;
+  unrecognized `risk`/`fix_state` values map to `UNKNOWN`, never a
+  silently "safe" default; out-of-range CVSS/exploitability values
+  rejected by the internal model's own bounds even if the raw schema
+  allowed them. Two new structured-log fields (`page`, `cumulative_items`)
+  and three new pagination event names. See
+  [docs/adr/005-pagination-data-contracts.md](docs/adr/005-pagination-data-contracts.md).
 
 ## [0.3.0] - 2026-08-26
 

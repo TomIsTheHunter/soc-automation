@@ -20,10 +20,14 @@ vulnerability/asset-context provider category, and the case-management
 provider category with idempotent writes (see
 [adr/003-idempotent-writes.md](adr/003-idempotent-writes.md)). A final
 follow-up added inbound webhook ingestion with signature verification
-(see [adr/004-webhook-ingestion.md](adr/004-webhook-ingestion.md)),
-completing every area named in Issue #4 except pagination-adjacent
-extras (concurrency limiting) and the vulnerability/case-management
-categories' workflow wiring, both explicitly disclosed as deferred below.
+(see [adr/004-webhook-ingestion.md](adr/004-webhook-ingestion.md)). Most
+recently, the vulnerability/asset-context provider was extended with a
+realistic paginated findings collection, explicit provider-schema-
+evolution handling, and a normalized `VulnerabilityFinding` contract (see
+[adr/005-pagination-data-contracts.md](adr/005-pagination-data-contracts.md)).
+What remains: pagination-adjacent extras (cross-request concurrency
+limiting) and wiring the vulnerability/case-management categories into
+the SOC workflow, both explicitly disclosed as deferred below.
 
 ## Why an integration layer exists
 
@@ -63,10 +67,17 @@ Enrichment Vulnerability Case Management
   (in-memory, pre-existing) and `ThreatIntelEnrichmentProvider` (new,
   mock-backed HTTP integration, this phase).
 - **Vulnerability/context provider** - retrieve vulnerability or asset
-  context for a hostname. Interface: `app.vulnerability.providers.VulnerabilityProvider`
-  (new, mirroring `EnrichmentProvider`). Implementations: `MockVulnerabilityProvider`
-  (in-memory) and `AssetIntelVulnerabilityProvider` (mock-backed HTTP
-  integration). Foundation only - not yet consumed by `app/services/workflow.py`
+  context for a hostname, and (new) a paginated collection of individual
+  vulnerability findings across the fleet. Interface:
+  `app.vulnerability.providers.VulnerabilityProvider` (mirroring
+  `EnrichmentProvider`, now with a `get_context()` per-asset summary
+  method and a `list_findings()` collection method). Implementations:
+  `MockVulnerabilityProvider` (in-memory) and
+  `AssetIntelVulnerabilityProvider` (mock-backed HTTP integration, using
+  the shared `BaseIntegrationClient.get_paginated()` for the findings
+  collection - see
+  [adr/005-pagination-data-contracts.md](adr/005-pagination-data-contracts.md)).
+  Foundation only - not yet consumed by `app/services/workflow.py`
   or exposed via any API/runtime selector; see "What was deliberately not
   wired" below.
 - **Case-management provider** - create SOC cases/incidents/tickets.
@@ -122,6 +133,20 @@ Case management is the same story: [`app.models.case.CaseResult`](../app/models/
 assignee, comments, or timestamps, since nothing consumes those yet
 either.
 
+The vulnerability *findings* collection (as opposed to the per-asset
+`VulnerabilityContext` summary above) needed a genuinely new model,
+[`app.models.vulnerability.VulnerabilityFinding`](../app/models/vulnerability.py)
+(`vulnerability_id`, `asset_id`, `severity`, `cvss`, `exploitability`,
+`remediation_status`, `source`, `observed_at`) plus a wrapper,
+`VulnerabilityCollectionResult` (`findings`, `complete`,
+`truncated_reason`), carrying the completion state a plain list cannot
+express. See
+[adr/005-pagination-data-contracts.md](adr/005-pagination-data-contracts.md)
+for the full reasoning, including why `severity` is its own enum rather
+than reusing `AssetCriticality` even though their values overlap
+(criticality describes an *asset*; severity describes one *finding* -
+different questions).
+
 ## Provider adapter responsibilities
 
 Each adapter (e.g. `ThreatIntelEnrichmentProvider`) is responsible for:
@@ -161,12 +186,17 @@ otherwise duplicate:
   `attempt`, `status_code`, `duration_ms`, `retry`, `error_type` - never
   raw request/response bodies or credentials).
 - Bounded cursor pagination (`get_paginated()`): a loop over `get()` that
-  follows a `next_cursor` field across pages, capped at `max_pages` so a
-  broken or malicious provider returning a cursor loop can never cause an
-  unbounded number of requests - the same bounded philosophy as retries.
-  Demonstrated by `ThreatIntelClient.list_indicators()` against a
-  synthetic multi-page endpoint (not wired into the SOC workflow - nothing
-  there needs a bulk indicator listing today).
+  follows a `next_cursor`/`has_more` signal across pages, capped at
+  `max_pages` and (new) `max_items`, with duplicate-cursor-loop detection
+  and a missing-next-cursor-despite-more-data check. Returns a typed
+  `PaginatedResult` (`items`, `complete`, `truncated_reason`) rather than
+  a bare list, so a deliberately bounded/truncated collection is never
+  mistaken for a complete one; a genuine page-fetch failure still
+  propagates as an `IntegrationError`. Demonstrated by
+  `ThreatIntelClient.list_indicators()` (a small fixed list) and
+  `AssetIntelClient.list_vulnerability_findings()` (a realistic
+  page-token-based findings collection) - see
+  [adr/005-pagination-data-contracts.md](adr/005-pagination-data-contracts.md).
 - Idempotency-safe writes (`post()`): shares the identical retry/timeout/
   classification loop as `get()` (`_send_with_retries()`, extracted from
   `get()` when `post()` was added, not a second implementation), plus a
@@ -336,6 +366,55 @@ New settings: `INCIDENT_DESK_WEBHOOK_SECRET` (safe mock default, mirroring
 `THREAT_INTEL_API_KEY`) and `MAX_WEBHOOK_BODY_BYTES` (fail-fast, mirroring
 `MAX_ALERT_BODY_BYTES`).
 
+## Vulnerability findings: pagination and schema evolution
+
+`AssetIntelClient.list_vulnerability_findings()` /
+`AssetIntelVulnerabilityProvider.list_findings()` demonstrate a realistic
+paginated collection endpoint end to end. Full reasoning in
+[adr/005-pagination-data-contracts.md](adr/005-pagination-data-contracts.md);
+summarized here:
+
+```
+External Provider (paginated /vulnerabilities)
+  -> HTTP Client (BaseIntegrationClient.get_paginated() - same timeout/
+     retry/rate-limit handling as every other request, no separate path)
+  -> Provider schema validation (AssetIntelFindingVendorResponse, per item)
+  -> Provider adapter (_normalize_finding(): risk/fix_state/cvss_score/... -> severity/remediation_status/cvss/...)
+  -> Internal model validation (VulnerabilityFinding: extra="forbid", bounded cvss/exploitability, UTC timestamp)
+  -> Normalized security model (VulnerabilityCollectionResult: findings + complete + truncated_reason)
+  -> SOC workflow (once wired)
+```
+
+- **Pagination strategy**: page-token based (`page_token`/`next_page_token`/
+  `has_more`), chosen because it exercises `get_paginated()`'s newest
+  capabilities (the `has_more`-without-token check) more realistically
+  than a pure cursor scheme would.
+- **Provider-specific vs. internal fields**: the raw schema's `risk`,
+  `fix_state`, `cvss_score`, `host_identifier`, etc. never leak past
+  `_normalize_finding()` - the rest of the platform only ever sees
+  `severity`, `remediation_status`, `cvss`, `asset_id`.
+- **Schema evolution**: a harmless new provider field is tolerated
+  (`extra="ignore"` on the raw finding schema - deliberately different
+  from the stricter single-asset lookup schema, see the ADR); a missing
+  required field, a null security-relevant field, or a type change
+  (`cvss_score` becoming a string) are all rejected; an unrecognized
+  `risk`/`fix_state` value maps to `UNKNOWN`, never a silently "safe"
+  default.
+- **Partial vs. complete collections**: `VulnerabilityCollectionResult.complete`
+  is `False` (with a `truncated_reason`) when a safety limit
+  (`max_pages`/`max_items`/duplicate-cursor) was hit; a genuine
+  mid-pagination provider failure raises
+  `VulnerabilityContextUnavailableError` instead of returning a partial
+  result, so a partial collection can never masquerade as a complete one.
+- **Safety limits**: `max_pages=20`, `max_items=500` (both explicit,
+  documented, adjustable per provider - not arbitrary).
+- **Adding a second vulnerability-findings provider**: implement
+  `VulnerabilityProvider.list_findings()` against the new vendor's own
+  raw schema and pagination mechanism, translating into the same
+  `VulnerabilityFinding`/`VulnerabilityCollectionResult` models - no
+  change required anywhere else, the same interchangeability property
+  already demonstrated for `get_context()`.
+
 ## Provider interchangeability - demonstrated, not just asserted
 
 `tests/test_threat_intel_provider.py::test_provider_interchangeability_with_deterministic_triage`
@@ -399,6 +478,17 @@ silently resolved:
   still exercises the real client code path, following the precedent
   already set by `tests/conftest.py`'s `httpx.ASGITransport` for the
   FastAPI app itself - no new test dependency was added.
+- **No existing convention for how tolerant a provider schema should be
+  to unknown fields.** The single-object lookup schemas
+  (`ThreatIntelVendorResponse`, `AssetIntelVendorResponse`) all use
+  `extra="forbid"`, never tested against a provider that changes its
+  schema over time. The new `AssetIntelFindingVendorResponse` needed to
+  tolerate a harmless new field without breaking, so it uses
+  `extra="ignore"` instead - see
+  [adr/005-pagination-data-contracts.md](adr/005-pagination-data-contracts.md)
+  for the reasoning and the convention this establishes going forward
+  (tolerant for items in an evolving, vendor-controlled collection;
+  strict for a single, narrowly-scoped lookup response).
 
 ## What was deliberately not wired (this phase)
 
@@ -436,7 +526,10 @@ silently resolved:
   low-risk follow-up once a concrete consumer exists - deciding *how*
   asset criticality should influence triage (a new rule? advisory
   evidence only?) is a design decision deliberately left for when that's
-  actually needed, not speculated on now.
+  actually needed, not speculated on now. `list_findings()` (the paginated
+  findings collection) is equally unwired for the same reason - there is
+  no product decision yet on how/whether the workflow should consume a
+  fleet-wide findings list per alert.
 - Case-management provider category
   (`app.case_management.providers.CaseManagementProvider`,
   `MockCaseManagementProvider`, `IncidentDeskCaseManagementProvider`) is
