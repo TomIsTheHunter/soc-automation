@@ -398,8 +398,11 @@ def test_get_paginated_follows_cursor_across_pages() -> None:
         return httpx.Response(200, json=pages[index])
 
     client = _client(httpx.MockTransport(handler))
-    items = client.get_paginated("/things")
-    assert items == [{"value": 1}, {"value": 2}, {"value": 3}]
+    result = client.get_paginated("/things")
+    assert result.items == [{"value": 1}, {"value": 2}, {"value": 3}]
+    assert result.complete is True
+    assert result.truncated_reason is None
+    assert result.pages_fetched == 3
     assert seen_cursors == [None, "2", "3"]
 
 
@@ -408,7 +411,9 @@ def test_get_paginated_stops_when_next_cursor_is_absent() -> None:
         return httpx.Response(200, json={"items": [{"value": "only"}]})
 
     client = _client(httpx.MockTransport(handler))
-    assert client.get_paginated("/things") == [{"value": "only"}]
+    result = client.get_paginated("/things")
+    assert result.items == [{"value": "only"}]
+    assert result.complete is True
 
 
 def test_get_paginated_is_bounded_by_max_pages() -> None:
@@ -416,13 +421,19 @@ def test_get_paginated_is_bounded_by_max_pages() -> None:
 
     def handler(_request: httpx.Request) -> httpx.Response:
         calls.append(1)
-        # A misbehaving/malicious provider that never stops paginating.
-        return httpx.Response(200, json={"items": [{"n": len(calls)}], "next_cursor": "loop"})
+        # A misbehaving/malicious provider that never stops paginating,
+        # using a fresh cursor each time so duplicate-detection never fires.
+        return httpx.Response(
+            200, json={"items": [{"n": len(calls)}], "next_cursor": f"c{len(calls) + 1}"}
+        )
 
     client = _client(httpx.MockTransport(handler))
-    items = client.get_paginated("/things", max_pages=3)
+    result = client.get_paginated("/things", max_pages=3)
     assert len(calls) == 3
-    assert len(items) == 3
+    assert len(result.items) == 3
+    assert result.complete is False
+    assert result.truncated_reason == "max_pages_reached"
+    assert result.pages_fetched == 3
 
 
 def test_get_paginated_raises_validation_error_for_missing_items_key() -> None:
@@ -432,6 +443,109 @@ def test_get_paginated_raises_validation_error_for_missing_items_key() -> None:
     client = _client(httpx.MockTransport(handler))
     with pytest.raises(IntegrationValidationError):
         client.get_paginated("/things")
+
+
+def test_get_paginated_detects_duplicate_cursor_and_stops() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        cursor = request.url.params.get("cursor")
+        if cursor is None:
+            return httpx.Response(200, json={"items": [{"n": 1}], "next_cursor": "c2"})
+        if cursor == "c2":
+            return httpx.Response(200, json={"items": [{"n": 2}], "next_cursor": "c3"})
+        # A buggy provider looping back to an already-seen cursor.
+        return httpx.Response(200, json={"items": [{"n": 3}], "next_cursor": "c2"})
+
+    client = _client(httpx.MockTransport(handler))
+    result = client.get_paginated("/things")
+    assert result.complete is False
+    assert result.truncated_reason == "duplicate_cursor_detected"
+    assert len(calls) == 3
+    assert len(result.items) == 3
+
+
+def test_get_paginated_raises_when_has_more_but_next_cursor_missing() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"items": [{"n": 1}], "has_more": True, "next_cursor": None}
+        )
+
+    client = _client(httpx.MockTransport(handler))
+    with pytest.raises(IntegrationValidationError):
+        client.get_paginated("/things", has_more_key="has_more")
+
+
+def test_get_paginated_is_bounded_by_max_items() -> None:
+    calls: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(
+            200, json={"items": [{"n": 1}, {"n": 2}], "next_cursor": f"c{len(calls) + 1}"}
+        )
+
+    client = _client(httpx.MockTransport(handler))
+    result = client.get_paginated("/things", max_items=3)
+    assert result.complete is False
+    assert result.truncated_reason == "max_items_reached"
+    assert len(result.items) == 3
+
+
+def test_get_paginated_empty_page_with_no_next_cursor_is_complete() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"items": []})
+
+    client = _client(httpx.MockTransport(handler))
+    result = client.get_paginated("/things")
+    assert result.items == []
+    assert result.complete is True
+
+
+def test_get_paginated_failure_mid_pagination_raises_not_partial_result() -> None:
+    """A page-fetch failure must propagate as an error, never as a
+    successful PaginatedResult carrying only the pages seen so far."""
+    calls: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) < 3:
+            return httpx.Response(
+                200, json={"items": [{"n": len(calls)}], "next_cursor": f"c{len(calls) + 1}"}
+            )
+        return httpx.Response(500, text="internal error")
+
+    client = _client(httpx.MockTransport(handler), retry_policy=RetryPolicy(max_attempts=1))
+    with pytest.raises(IntegrationServerError):
+        client.get_paginated("/things")
+    assert len(calls) == 3
+
+
+def test_get_paginated_logs_page_and_cumulative_item_counts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pages = [
+        {"items": [{"value": 1}], "next_cursor": "2"},
+        {"items": [{"value": 2}], "next_cursor": None},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cursor = request.url.params.get("cursor")
+        index = int(cursor) - 1 if cursor else 0
+        return httpx.Response(200, json=pages[index])
+
+    client = _client(httpx.MockTransport(handler))
+    with caplog.at_level(logging.INFO, logger="app.integrations.base"):
+        client.get_paginated("/things")
+
+    page_events = [
+        r for r in caplog.records if getattr(r, "event", None) == "pagination_page_fetched"
+    ]
+    assert [getattr(r, "page", None) for r in page_events] == [1, 2]
+    assert [getattr(r, "cumulative_items", None) for r in page_events] == [1, 2]
+    completed = [r for r in caplog.records if getattr(r, "event", None) == "pagination_completed"]
+    assert len(completed) == 1
 
 
 # --- POST + idempotency -------------------------------------------------
