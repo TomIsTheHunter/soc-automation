@@ -35,6 +35,8 @@ STRUCTURED_FIELDS: tuple[str, ...] = (
     "attempt",
     "retry",
     "status_code",
+    "page",
+    "cumulative_items",
 )
 
 
@@ -95,6 +97,8 @@ def log_event(
     attempt: int | None = None,
     retry: bool | None = None,
     status_code: int | None = None,
+    page: int | None = None,
+    cumulative_items: int | None = None,
     exc_info: bool | BaseException = False,
 ) -> None:
     """Log one structured operational event with consistent field names.
@@ -116,6 +120,8 @@ def log_event(
         "attempt": attempt,
         "retry": retry,
         "status_code": status_code,
+        "page": page,
+        "cumulative_items": cumulative_items,
     }
     extra = {key: value for key, value in fields.items() if value is not None}
     logger.log(level, message, extra=extra, exc_info=exc_info)

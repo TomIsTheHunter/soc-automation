@@ -159,10 +159,21 @@ class ThreatIntelClient(BaseIntegrationClient):
             ) from exc
 
     def list_indicators(self) -> list[ThreatIntelVendorResponse]:
-        """Fetch every known indicator across all pages of `/indicators/list`."""
-        raw_items = self.get_paginated("/indicators/list", operation="list_indicators")
+        """Fetch every known indicator across all pages of `/indicators/list`.
+
+        Raises `IntegrationValidationError` if the collection could not be
+        retrieved completely (a pagination safety limit was hit) - never
+        silently returns a partial indicator list as if it were the full
+        one. See docs/adr/005-pagination-data-contracts.md.
+        """
+        result = self.get_paginated("/indicators/list", operation="list_indicators")
+        if not result.complete:
+            raise IntegrationValidationError(
+                f"{PROVIDER_NAME} indicator list was truncated ({result.truncated_reason})",
+                provider=PROVIDER_NAME,
+            )
         try:
-            return [ThreatIntelVendorResponse.model_validate(item) for item in raw_items]
+            return [ThreatIntelVendorResponse.model_validate(item) for item in result.items]
         except ValidationError as exc:
             raise IntegrationValidationError(
                 f"{PROVIDER_NAME} returned an unexpected response schema",

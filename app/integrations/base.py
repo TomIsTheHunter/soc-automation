@@ -16,7 +16,11 @@ Deliberately minimal: two small auth strategies, one retry policy
 dataclass, and one client class - no plugin registry, generic
 request-building DSL, or second retry framework. Cursor-based pagination
 is supported via `get_paginated()`, itself just a bounded loop over the
-existing `get()` (retries/timeouts/logging already apply per page).
+existing `get()` (retries/timeouts/logging already apply per page) that
+returns a `PaginatedResult` - `complete=False` makes a deliberately
+bounded/truncated collection impossible to mistake for a full one; a
+genuine page-fetch failure still propagates as an `IntegrationError`. See
+docs/adr/005-pagination-data-contracts.md.
 `post()` shares the exact same retry loop (`_send_with_retries()`) and
 adds a stable `Idempotency-Key` header so retrying a write is safe - see
 docs/adr/003-idempotent-writes.md. Provider-specific/concurrency-based
@@ -69,6 +73,29 @@ class RetryPolicy:
     backoff_base_seconds: float = 0.5
     backoff_max_seconds: float = 8.0
     max_retry_after_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
+class PaginatedResult:
+    """Outcome of a bounded, cursor-following `get_paginated()` call.
+
+    `complete=True` means every page was followed until the provider
+    signaled no more data. `complete=False` means the caller received
+    fewer than the full collection because a safety limit was hit
+    (`truncated_reason` is one of `"max_pages_reached"`,
+    `"max_items_reached"`, or `"duplicate_cursor_detected"`) - the
+    request(s) themselves succeeded, this was a deliberate stop, not a
+    failure. A genuine page-fetch failure (e.g. HTTP 503 after retries
+    are exhausted) is never represented here - it propagates as an
+    `IntegrationError` instead, so a partial collection can never be
+    mistaken for a complete or even a deliberately-bounded one. See
+    docs/adr/005-pagination-data-contracts.md.
+    """
+
+    items: list[dict[str, Any]]
+    complete: bool
+    pages_fetched: int
+    truncated_reason: str | None = None
 
 
 class AuthStrategy(Protocol):
@@ -263,21 +290,35 @@ class BaseIntegrationClient:
         items_key: str = "items",
         cursor_param: str = "cursor",
         next_cursor_key: str = "next_cursor",
+        has_more_key: str | None = None,
         max_pages: int = 20,
-    ) -> list[dict[str, Any]]:
+        max_items: int | None = None,
+    ) -> PaginatedResult:
         """Follow a cursor-paginated GET endpoint and return all items across pages.
 
         Each page is fetched via `get()`, so per-page auth/timeout/retry/
         logging behavior is unchanged - this only adds the cursor-following
-        loop. Bounded by `max_pages` so a broken or malicious provider
-        returning a cursor loop can never cause an unbounded number of
-        requests, the same bounded philosophy as retries (see
-        docs/adr/002-provider-resilience.md).
+        loop; a page-fetch failure (after `get()`'s own retries are
+        exhausted) propagates as an `IntegrationError`, never silently
+        returning whatever was collected so far as if it were complete.
+
+        Bounded by `max_pages` (requests) and optionally `max_items`
+        (collected items), the same philosophy as retries (see
+        docs/adr/002-provider-resilience.md). Duplicate-cursor loops and a
+        provider that signals more data via `has_more_key` without
+        supplying `next_cursor_key` are both detected explicitly rather
+        than looping forever or silently stopping. See
+        docs/adr/005-pagination-data-contracts.md for the full reasoning
+        - the returned `PaginatedResult.complete` flag is how a caller
+        tells a full collection from a bounded/truncated one.
         """
         collected: list[dict[str, Any]] = []
+        seen_cursors: set[str] = set()
         page_params = dict(params or {})
+        pages_fetched = 0
         for _ in range(max_pages):
             page = self.get(path, params=page_params, operation=operation)
+            pages_fetched += 1
             items = page.get(items_key)
             if not isinstance(items, list):
                 raise IntegrationValidationError(
@@ -285,11 +326,94 @@ class BaseIntegrationClient:
                     provider=self.provider_name,
                 )
             collected.extend(items)
+            log_event(
+                logger,
+                logging.INFO,
+                f"Fetched page {pages_fetched} from {self.provider_name} "
+                f"({len(items)} items, {len(collected)} cumulative)",
+                event="pagination_page_fetched",
+                provider=self.provider_name,
+                operation=operation,
+                page=pages_fetched,
+                cumulative_items=len(collected),
+            )
+
+            if max_items is not None and len(collected) >= max_items:
+                return self._truncated_pagination_result(
+                    collected[:max_items], "max_items_reached", pages_fetched, operation
+                )
+
             next_cursor = page.get(next_cursor_key)
+            has_more = page.get(has_more_key) if has_more_key is not None else None
+            if has_more and not next_cursor:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    f"{self.provider_name} indicated more pages via {has_more_key!r} but did "
+                    f"not supply {next_cursor_key!r}",
+                    event="pagination_truncated",
+                    provider=self.provider_name,
+                    operation=operation,
+                    page=pages_fetched,
+                    cumulative_items=len(collected),
+                    result="error",
+                    error_type="missing_next_cursor",
+                )
+                raise IntegrationValidationError(
+                    f"{self.provider_name} indicated more pages via {has_more_key!r} but did "
+                    f"not supply {next_cursor_key!r}",
+                    provider=self.provider_name,
+                )
             if not next_cursor:
-                break
+                log_event(
+                    logger,
+                    logging.INFO,
+                    f"Pagination completed: {len(collected)} item(s) across "
+                    f"{pages_fetched} page(s)",
+                    event="pagination_completed",
+                    provider=self.provider_name,
+                    operation=operation,
+                    page=pages_fetched,
+                    cumulative_items=len(collected),
+                    result="complete",
+                )
+                return PaginatedResult(items=collected, complete=True, pages_fetched=pages_fetched)
+            if next_cursor in seen_cursors:
+                return self._truncated_pagination_result(
+                    collected, "duplicate_cursor_detected", pages_fetched, operation
+                )
+            seen_cursors.add(next_cursor)
             page_params = {**(params or {}), cursor_param: next_cursor}
-        return collected
+
+        return self._truncated_pagination_result(
+            collected, "max_pages_reached", pages_fetched, operation
+        )
+
+    def _truncated_pagination_result(
+        self,
+        items: list[dict[str, Any]],
+        truncated_reason: str,
+        pages_fetched: int,
+        operation: str | None,
+    ) -> "PaginatedResult":
+        log_event(
+            logger,
+            logging.WARNING,
+            f"Pagination truncated after {pages_fetched} page(s): {truncated_reason}",
+            event="pagination_truncated",
+            provider=self.provider_name,
+            operation=operation,
+            page=pages_fetched,
+            cumulative_items=len(items),
+            result="truncated",
+            error_type=truncated_reason,
+        )
+        return PaginatedResult(
+            items=items,
+            complete=False,
+            pages_fetched=pages_fetched,
+            truncated_reason=truncated_reason,
+        )
 
     def _retry_after_exception(
         self, exc: Exception, attempt: int, operation: str, started: float
