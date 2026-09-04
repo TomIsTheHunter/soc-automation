@@ -19,7 +19,14 @@ from app.models.investigation import (
     ProcessingResponse,
     RecommendedAction,
 )
-from app.models.vulnerability import AssetCriticality, VulnerabilityContext
+from app.models.vulnerability import (
+    AssetCriticality,
+    RemediationStatus,
+    VulnerabilityCollectionResult,
+    VulnerabilityContext,
+    VulnerabilityFinding,
+    VulnerabilitySeverity,
+)
 from app.models.webhook import IncidentDeskWebhookEvent, IncidentDeskWebhookPayload
 from app.models.workflow import (
     Confidence,
@@ -61,9 +68,13 @@ __all__ = [
     "ProcessingResponse",
     "ProcessingStage",
     "RecommendedAction",
+    "RemediationStatus",
     "Reputation",
     "Severity",
     "TriageDecision",
     "TriageResult",
+    "VulnerabilityCollectionResult",
     "VulnerabilityContext",
+    "VulnerabilityFinding",
+    "VulnerabilitySeverity",
 ]
